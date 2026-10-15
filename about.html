@@ -1,0 +1,140 @@
+---
+layout: default
+title: About
+---
+
+<div class="prose">
+
+<h1>About RouteLab</h1>
+
+<p class="lead">
+  RouteLab plans a bike route on the map and writes it out as a GPX or TCX with
+  the cues you want on the day: the turns, when to eat, when to drink, and what
+  power to hold on the long climb.
+</p>
+
+<p>
+  It runs entirely in your browser. There is no RouteLab server, no account, and
+  no upload. Routes are kept in this browser's IndexedDB and go nowhere else. It
+  is a sibling of <a href="https://www.noahpaladino.com/CritLab/">CritLab</a> and
+  <a href="https://www.noahpaladino.com/CrossLab/">CrossLab</a>, and the three
+  share their settings, your FTP and weight, and the intervals.icu key.
+</p>
+
+<h2>Drawing a route</h2>
+
+<ul>
+  <li><b>Click</b> the map to add a point. The route follows the road network to it.</li>
+  <li><b>Drag</b> a point to move it; only the two legs that touch it are re-routed.</li>
+  <li><b>Drag the line</b> to pull the route through somewhere new.</li>
+  <li><b>Click a point</b> to select it, then <b>Remove</b> (or press Delete).</li>
+  <li><b>Close loop</b> routes back to the start; <b>Out &amp; back</b> returns the way you came.</li>
+  <li>Undo and redo cover every edit, cues included (Ctrl+Z / Ctrl+Shift+Z).</li>
+</ul>
+
+<p>
+  Routing comes from <a href="https://brouter.de" target="_blank" rel="noopener">BRouter</a>.
+  <b>Straight line</b> draws exactly what you click, for trails the router doesn't
+  know. Changing the terrain re-routes the whole route, except any imported
+  track, which keeps its line; undo puts it back.
+</p>
+
+<h2>Terrain and skill</h2>
+
+<ul>
+  <li><b>Paved roads</b>: the fastest tarmac.</li>
+  <li><b>Quiet roads &amp; bike paths</b>: bike paths and quiet roads, including smooth unpaved paths.</li>
+  <li><b>Smooth gravel</b>: gravel roads and good tracks where they fit, pavement where they don't.</li>
+  <li><b>Rough gravel &amp; dirt</b>: actively looks for unpaved roads and tracks.</li>
+  <li><b>Mountain bike, beginner to expert</b>: trails by their OpenStreetMap
+    <a href="https://wiki.openstreetmap.org/wiki/Key:mtb:scale" target="_blank" rel="noopener">mtb:scale</a> grade.
+    <ul>
+      <li>Beginner rides S0–S1: smooth singletrack, roots and small rocks.</li>
+      <li>Intermediate goes up to S2: bigger rocks, steps, tight switchbacks.</li>
+      <li>Advanced goes up to S3, and Expert up to S4.</li>
+    </ul>
+    Each level rides trails inside its grade freely, pays a little to use the
+    top of it, and won't route on anything harder. Hiking-graded trails
+    (<code>sac_scale</code>) are treated the same way. A trail
+    tagged for foot traffic only is avoided at every level.</li>
+</ul>
+
+<p>
+  The grades are only as good as the map: plenty of trails have no
+  <code>mtb:scale</code> at all and are treated as rideable. Under the stats you
+  can see what the route actually uses: how much is paved, gravel or trail, and
+  the hardest graded trail on it. Check that before you trust a line through
+  unfamiliar woods.
+</p>
+
+<p>
+  You can also start from something you already have: drop in a <code>.gpx</code>,
+  <code>.tcx</code> or <code>.fit</code>, or, with intervals.icu connected, trace one of
+  your past rides. An imported track keeps its exact line. Waypoints and course
+  points already in the file come in as cues.
+</p>
+
+<h2>Cues</h2>
+
+<p>
+  Custom cues are anchored by <b>distance from the start</b>. "Eat every 20 km"
+  is about distance, not about whichever corner you happen to be at, so if you
+  change the route the cues stay at their kilometre marks. A cue that ends up
+  past the finish after an edit is flagged and left out of the export.
+</p>
+
+<ul>
+  <li><b>One cue</b>: eat, drink, a note, danger, summit or a water stop, at a distance you type, pick on the map, or click on the elevation profile.</li>
+  <li><b>Repeating</b>: every N km from one distance to another. The series is added as ordinary cues, so you can move or delete one, or remove the whole series.</li>
+  <li><b>Power target</b>: hold so many watts (or % of FTP) from one distance to another. You get a cue where it starts (<code>260W 8km</code>) and one where it ends. <b>On every climb…</b> finds every climb of 2 km or more at 3% or steeper and puts the target on each.</li>
+</ul>
+
+<p>
+  Turn cues come from the router and follow the road, so they move whenever the
+  route does. Sharp turns, U-turns and roundabouts are included by default;
+  slight turns and keep-left/right are optional in Settings.
+</p>
+
+<h2>The time estimate</h2>
+
+<p>
+  Each cue shows an ETA, and the preview for a repeating cue shows roughly how
+  much time is between them. The estimate comes from physics, not an average
+  speed. On every stretch of road it finds the speed at which your power
+  balances gravity on that gradient, rolling resistance and air drag. The power
+  is the target of any power cue covering that stretch, and otherwise a share of
+  your FTP (70% unless you change it). Downhill speed is capped at 55 km/h.
+  Mass, CdA and rolling resistance are the shared values CritLab uses, so if
+  CritLab has fitted your CdA, RouteLab uses it too.
+</p>
+
+<h2>Exporting</h2>
+
+<p>
+  Every cue becomes a point <b>exactly on the track</b>: its position is
+  interpolated along the line and inserted as a track point. A waypoint that is
+  merely near the line can be ignored by a head unit, or placed at distance zero
+  so it fires at the start.
+</p>
+
+<ul>
+  <li><b>GPX</b>: the track, plus a <code>&lt;wpt&gt;</code> for each cue with a short name, the full text in the comment and description, and a type (Food, Water, Left, Right, Summit, Danger, Generic). Many apps and head units read these as cues; Garmin Connect makes course points from them only some of the time.</li>
+  <li><b>TCX</b>: a Garmin course with real CoursePoints, using Garmin's own types. This is the reliable choice for a Garmin Edge. Names are cut to Garmin's 10-character limit, which is why power cues read <code>260W 8km</code>.</li>
+  <li><b>Cue sheet</b>: a CSV with distance, ETA, type and text, to print or tape to the stem.</li>
+  <li><b>JSON</b>: the whole route, legs, cues and all, to load back into RouteLab.</li>
+</ul>
+
+<h2>Privacy</h2>
+
+<p>
+  RouteLab asks other services for things, and each one sees only what it is
+  asked about. Map tiles come from the OpenStreetMap community tile servers
+  (OpenStreetMap, CyclOSM or OpenTopoMap), which see the area you are looking
+  at. Routes come from brouter.de, which sees the two points of each leg.
+  Open-Meteo is asked for elevation only on straight-line legs and on imports
+  that have none. Nominatim sees what you type into the search box. The
+  intervals.icu key goes only to intervals.icu, and only when you ask for a
+  ride or your FTP.
+</p>
+
+</div>

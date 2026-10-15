@@ -1,0 +1,16 @@
+{
+  "name": "routelab",
+  "version": "0.1.0",
+  "description": "Route planning in the browser, exported as GPX/TCX with eat, drink and target-power cues",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "test": "node test/harness.js && node test/dom.js",
+    "test:unit": "node test/harness.js",
+    "test:dom": "node test/dom.js",
+    "serve": "bundle exec jekyll serve --livereload"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  }
+}

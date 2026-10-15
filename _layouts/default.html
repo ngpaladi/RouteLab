@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% if page.title %}{{ page.title }} | {% endif %}{{ site.title }}</title>
+  <link rel="stylesheet" href="{{ '/assets/css/main.css' | relative_url }}">
+  {% seo %}
+</head>
+<body>
+  <header class="site-header">
+    <a href="{{ '/' | relative_url }}" class="site-title">Route<span>Lab</span></a>
+    <nav class="site-nav">
+      <a href="{{ '/' | relative_url }}" {% if page.url == '/' %}class="active"{% endif %}>Plan</a>
+      <a href="{{ '/about.html' | relative_url }}" {% if page.url contains 'about' %}class="active"{% endif %}>About</a>
+      <a href="https://www.noahpaladino.com/CritLab/" class="sibling" title="Criterium analysis">CritLab ↗</a>
+      <a href="https://www.noahpaladino.com/CrossLab/" class="sibling" title="Cyclocross analysis">CrossLab ↗</a>
+    </nav>
+    <div class="header-spacer"></div>
+    <button id="settings-btn" class="settings-btn" aria-label="Settings">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </header>
+
+  <main>
+    {{ content }}
+  </main>
+
+  <!-- Settings drawer -->
+  <div id="settings-modal" class="modal" style="display:none" role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="modal-overlay" id="settings-overlay"></div>
+    <div class="drawer">
+      <div class="drawer-head">
+        <span>Settings</span>
+        <button id="settings-close" class="drawer-close" aria-label="Close">&#215;</button>
+      </div>
+      <div class="drawer-body">
+
+        <div class="settings-section">
+          <div class="settings-section-title">intervals.icu</div>
+          <p class="hint" id="icu-state">Not connected.</p>
+          <div class="btn-row" style="margin-top:8px">
+            <a class="btn btn-primary btn-sm" id="icu-connect-link" href="{{ '/connect.html' | relative_url }}">Connect intervals.icu</a>
+            <button class="btn btn-sm" id="icu-clear">Disconnect</button>
+          </div>
+          <div class="settings-row" style="margin-top:10px">
+            <label for="icu-persist">Keep the key</label>
+            <select id="icu-persist">
+              <option value="local">In this browser, until I remove it</option>
+              <option value="session">Only until I close this tab</option>
+            </select>
+          </div>
+          <p class="hint">
+            Optional in RouteLab. The key goes only to intervals.icu, directly from your
+            browser &mdash; there is no RouteLab server. It is shared with CritLab and CrossLab.
+          </p>
+          <div id="icu-status" class="status status-info" style="display:none"></div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">You and the bike</div>
+          <p class="hint">
+            For power targets in % of FTP and the time estimate. Shared with CritLab and
+            CrossLab, so changing them here changes them there too.
+          </p>
+          <div class="settings-row">
+            <label for="set-ftp">FTP (W)</label>
+            <input type="number" id="set-ftp" min="50" max="600" step="1">
+          </div>
+          <div class="settings-row">
+            <label for="set-mass">Rider + bike (kg)</label>
+            <input type="number" id="set-mass" min="30" max="200" step="0.5">
+          </div>
+          <div class="settings-row">
+            <label for="set-pct">Time estimate assumes you ride at (% of FTP, outside power targets)</label>
+            <input type="number" id="set-pct" min="30" max="110" step="1">
+          </div>
+          <div class="settings-row">
+            <label for="set-descent">…and descend no faster than (km/h)</label>
+            <input type="number" id="set-descent" min="20" max="100" step="1">
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Units and map</div>
+          <div class="settings-row">
+            <label for="set-units">Distances</label>
+            <select id="set-units"><option value="km">Kilometres and metres</option><option value="mi">Miles and feet</option></select>
+          </div>
+          <div class="settings-row">
+            <label for="set-tiles">Map style</label>
+            <select id="set-tiles"></select>
+          </div>
+          <p class="hint" style="margin-top:6px">
+            Map tiles come from the OpenStreetMap community's servers; routes from
+            <a href="https://brouter.de" target="_blank" rel="noopener">BRouter</a>; elevation for
+            straight lines and imports from <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>;
+            place search from Nominatim. Each sees only the points it is asked about.
+          </p>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Turn cues</div>
+          <label class="check"><input type="checkbox" id="set-slight"><span>Include slight turns and keep-left / keep-right</span></label>
+          <p class="hint" style="margin-top:6px">
+            Off by default: most head units already say "bear left" from the line itself,
+            and a cue at every fork buries the ones that matter.
+          </p>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Getting started</div>
+          <p class="hint">A short tour of where things are.</p>
+          <div class="btn-row" style="margin-top:8px">
+            <a class="btn btn-sm" id="tour-replay" href="{{ '/' | relative_url }}?tour=1">Replay the walkthrough</a>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Stored data</div>
+          <p class="hint">
+            Routes are kept in this browser's IndexedDB, in RouteLab's own database.
+            Nothing is uploaded anywhere. Export a route as JSON to move it to another browser.
+          </p>
+          <div class="btn-row" style="margin-top:10px">
+            <button class="btn btn-sm" id="data-clear">Delete all saved routes</button>
+          </div>
+          <div id="data-status" class="status status-info" style="display:none"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ '/assets/js/Intervals.js' | relative_url }}"></script>
+  <script src="{{ '/assets/js/RouteStore.js' | relative_url }}"></script>
+  {% if page.app %}
+  <script src="{{ '/assets/js/Fit.js' | relative_url }}"></script>
+  <script src="{{ '/assets/js/Router.js' | relative_url }}"></script>
+  <script src="{{ '/assets/js/Cues.js' | relative_url }}"></script>
+  <script src="{{ '/assets/js/Gpx.js' | relative_url }}"></script>
+  <script src="{{ '/assets/js/TileMap.js' | relative_url }}"></script>
+  <script src="{{ '/assets/js/Profile.js' | relative_url }}"></script>
+  <script src="{{ '/assets/js/Tour.js' | relative_url }}"></script>
+  <script src="{{ '/assets/js/app.js' | relative_url }}"></script>
+  {% endif %}
+
+  <script>
+  /* Settings drawer — available on every page, depends only on Settings. */
+  (function () {
+    'use strict';
+
+    var $ = function (id) { return document.getElementById(id); };
+    var modal = $('settings-modal'), statusEl = $('icu-status'), persistEl = $('icu-persist');
+    var TILES = { osm: 'OpenStreetMap', cyclosm: 'CyclOSM (bike lanes, surfaces)', topo: 'OpenTopoMap (contours)' };
+
+    function say(el, kind, msg) {
+      el.className = 'status status-' + kind;
+      el.textContent = msg;
+      el.style.display = '';
+    }
+    function fire(detail) { window.dispatchEvent(new CustomEvent('routelab:settings', { detail: detail })); }
+
+    $('set-tiles').innerHTML = Object.keys(TILES).map(function (k) { return '<option value="' + k + '">' + TILES[k] + '</option>'; }).join('');
+
+    function renderIcu() {
+      var on = !!Settings.getIcuKey(), name = Settings.get('icuAthleteName');
+      $('icu-state').textContent = on ? 'Connected' + (name ? ' as ' + name : '') + '.' : 'Not connected.';
+      $('icu-connect-link').textContent = on ? 'Use a different key' : 'Connect intervals.icu';
+      $('icu-clear').style.display = on ? '' : 'none';
+    }
+
+    function open() {
+      var s = Settings.all();
+      renderIcu();
+      persistEl.value = s.icuKeyPersist || 'local';
+      $('set-ftp').value = s.ftp;
+      $('set-mass').value = s.mass;
+      $('set-pct').value = s.rlRidePct;
+      $('set-descent').value = s.rlMaxDescent;
+      $('set-units').value = s.rlUnits;
+      $('set-tiles').value = s.rlTiles;
+      $('set-slight').checked = !!s.rlSlightTurns;
+      statusEl.style.display = 'none';
+      modal.style.display = '';
+    }
+    function close() { modal.style.display = 'none'; }
+
+    $('settings-btn').addEventListener('click', open);
+    $('settings-close').addEventListener('click', close);
+    $('settings-overlay').addEventListener('click', close);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && modal.style.display !== 'none') close();
+    });
+
+    persistEl.addEventListener('change', function () {
+      Settings.set({ icuKeyPersist: persistEl.value });
+      say(statusEl, 'info', persistEl.value === 'session'
+        ? 'The key will be dropped when you close this tab.'
+        : 'The key will be remembered in this browser.');
+    });
+
+    $('icu-clear').addEventListener('click', function () {
+      Settings.forgetIcuKey();
+      Settings.set({ icuAthlete: '', icuAthleteName: '' });
+      renderIcu();
+      say(statusEl, 'ok', 'Disconnected — the key is erased from this browser.');
+      fire({ icu: true });
+    });
+
+    function num(id, key, lo, hi, extra) {
+      $(id).addEventListener('change', function () {
+        var v = parseFloat(this.value);
+        if (!isFinite(v)) return;
+        v = Math.max(lo, Math.min(hi, v));
+        this.value = v;
+        var patch = {}; patch[key] = v;
+        if (extra) for (var k in extra) patch[k] = extra[k];
+        Settings.set(patch);
+        fire({ rider: true });
+      });
+    }
+    num('set-ftp', 'ftp', 50, 600, { ftpUserSet: true });
+    num('set-mass', 'mass', 30, 200);
+    num('set-pct', 'rlRidePct', 30, 110);
+    num('set-descent', 'rlMaxDescent', 20, 100);
+
+    $('set-units').addEventListener('change', function () { Settings.set({ rlUnits: this.value }); fire({ units: true }); });
+    $('set-tiles').addEventListener('change', function () { Settings.set({ rlTiles: this.value }); fire({ tiles: true }); });
+    $('set-slight').addEventListener('change', function () { Settings.set({ rlSlightTurns: this.checked }); fire({ turns: true }); });
+
+    $('data-clear').addEventListener('click', async function () {
+      if (!confirm('Delete every route saved in this browser by RouteLab? This cannot be undone.')) return;
+      await RouteStore.clear();
+      Local.setCurrent(null);
+      fire({ cleared: true });
+      say($('data-status'), 'ok', 'Saved routes deleted.');
+    });
+  })();
+  </script>
+</body>
+</html>

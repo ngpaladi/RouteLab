@@ -1,0 +1,217 @@
+---
+layout: default
+title: Plan
+app: true
+---
+
+<div class="app-wrap" id="app-wrap" data-panel="map">
+
+  <!-- ── Routes ────────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="scroll-y">
+      <div class="sidebar-section" id="route-section">
+        <div class="sidebar-section-title"><span>This route</span></div>
+        <input type="text" id="route-name" placeholder="Route name" autocomplete="off" spellcheck="false">
+        <div class="route-stats" id="route-stats"></div>
+        <div class="settings-row">
+          <label for="route-profile">Terrain &amp; skill</label>
+          <select id="route-profile"></select>
+        </div>
+        <p class="hint" style="margin-top:4px" id="terrain-hint"></p>
+        <div class="btn-row" style="margin-top:8px" id="route-tools">
+          <button class="btn btn-sm" id="undo-btn" title="Undo (Ctrl+Z)">Undo</button>
+          <button class="btn btn-sm" id="redo-btn" title="Redo (Ctrl+Shift+Z)">Redo</button>
+          <button class="btn btn-sm" id="loop-btn" title="Route back to the start">Close loop</button>
+          <button class="btn btn-sm" id="back-btn" title="Return the way you came">Out &amp; back</button>
+          <button class="btn btn-sm" id="reverse-btn" title="Ride it the other way">Reverse</button>
+          <button class="btn btn-sm" id="clear-btn">Clear</button>
+        </div>
+        <div class="btn-row" style="margin-top:8px">
+          <button class="btn btn-sm btn-primary" id="new-btn">New route</button>
+          <button class="btn btn-sm" id="demo-btn">Load sample route</button>
+        </div>
+        <div id="route-status"></div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-title"><span>Import</span></div>
+        <div class="dropzone" id="dropzone">
+          Drop a <b>.gpx</b>, <b>.tcx</b>, <b>.fit</b> or <b>.json</b><br>or click to choose
+        </div>
+        <input type="file" id="file-input" accept=".gpx,.GPX,.tcx,.TCX,.fit,.FIT,.json" hidden>
+        <p class="hint" style="margin-top:6px">
+          An existing route keeps its exact line; add cues to it and export again.
+          Waypoints and course points in the file come in as cues.
+        </p>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-title"><span>intervals.icu</span></div>
+        <div id="icu-connect" style="display:none">
+          <a class="btn btn-primary icu-connect-cta" id="icu-connect-cta" href="{{ '/connect.html' | relative_url }}">Connect intervals.icu</a>
+          <p class="hint">Start a route from one of your past rides, and use your FTP for power cues.</p>
+        </div>
+        <div id="icu-panel" style="display:none">
+          <p class="hint" style="margin-bottom:8px" id="icu-who"></p>
+          <div class="btn-row">
+            <button class="btn btn-sm" id="icu-fetch">Trace a past ride…</button>
+            <button class="btn btn-sm" id="icu-ftp" title="Copy your FTP from intervals.icu">Use my FTP</button>
+          </div>
+          <div id="icu-results" style="margin-top:8px"></div>
+        </div>
+      </div>
+
+      <div class="sidebar-section-title" style="padding:10px 12px 0">
+        <span>Saved routes</span>
+        <span class="hint" id="route-count"></span>
+      </div>
+      <div class="ride-list" id="route-list">
+        <div class="list-empty">No saved routes yet</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Map + profile ─────────────────────────────────────────────────── -->
+  <div class="center-area">
+    <div class="map-area" id="map-area">
+      <div class="map-search">
+        <input type="text" id="search-input" placeholder="Search for a place…" autocomplete="off" spellcheck="false">
+        <div class="search-results" id="search-results" hidden></div>
+      </div>
+      <div class="map-zoom">
+        <button class="btn btn-sm" id="zoom-in" aria-label="Zoom in">+</button>
+        <button class="btn btn-sm" id="zoom-out" aria-label="Zoom out">−</button>
+        <button class="btn btn-sm" id="zoom-fit" title="Fit the route" aria-label="Fit the route">⤢</button>
+        <button class="btn btn-sm" id="locate-btn" title="Where am I?" aria-label="Show my location">◎</button>
+      </div>
+      <div class="map-mode" id="map-mode" hidden></div>
+      <div class="wp-bar" id="wp-bar" hidden></div>
+    </div>
+    <div class="profile-wrap">
+      <canvas id="profile" class="profile-canvas"></canvas>
+    </div>
+    <div class="map-help hint" id="map-help">
+      Click to add a point · drag a point to move it · drag the line to route through
+      somewhere new · click a point to select it, then Remove · click the profile to put a cue there
+    </div>
+  </div>
+
+  <!-- ── Cues ──────────────────────────────────────────────────────────── -->
+  <aside class="rail">
+    <div class="scroll-y">
+      <div class="rail-section" id="cue-add">
+        <div class="sidebar-section-title"><span>Add a cue</span></div>
+        <div class="seg cue-kind" id="cue-kind"></div>
+
+        <div class="cue-form" id="form-one">
+          <div class="cue-grid">
+            <label for="cue-type">Type</label>
+            <select id="cue-type"></select>
+            <label for="cue-at">At <span class="unit-label">km</span></label>
+            <div class="inline-input">
+              <input type="number" id="cue-at" min="0" step="0.1" value="0">
+              <button class="btn btn-sm" id="cue-pick" title="Click a spot on the route">Pick on map</button>
+            </div>
+            <label for="cue-label">Text</label>
+            <input type="text" id="cue-label" placeholder="Eat" maxlength="40">
+            <label for="cue-note">Note</label>
+            <input type="text" id="cue-note" placeholder="optional, shown on some devices" maxlength="120">
+          </div>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn btn-sm btn-primary" id="cue-add-btn">Add cue</button>
+          </div>
+        </div>
+
+        <div class="cue-form" id="form-series" hidden>
+          <div class="cue-grid">
+            <label for="ser-type">Type</label>
+            <select id="ser-type"></select>
+            <label for="ser-every">Every</label>
+            <div class="inline-input"><input type="number" id="ser-every" min="0.5" step="0.5" value="20"><span class="unit-label">km</span></div>
+            <label for="ser-from">From</label>
+            <div class="inline-input"><input type="number" id="ser-from" min="0" step="0.5" value="15"><span class="unit-label">km</span></div>
+            <label for="ser-to">Until</label>
+            <div class="inline-input"><input type="number" id="ser-to" min="0" step="0.5" placeholder="the end"><span class="unit-label">km</span></div>
+            <label for="ser-label">Text</label>
+            <input type="text" id="ser-label" placeholder="Eat" maxlength="40">
+          </div>
+          <p class="hint" id="ser-preview" style="margin-top:6px"></p>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn btn-sm btn-primary" id="ser-add-btn">Add series</button>
+          </div>
+        </div>
+
+        <div class="cue-form" id="form-power" hidden>
+          <div class="cue-grid">
+            <label for="pw-from">From</label>
+            <div class="inline-input">
+              <input type="number" id="pw-from" min="0" step="0.1" value="0">
+              <button class="btn btn-sm" id="pw-pick" title="Click a spot on the route">Pick</button>
+            </div>
+            <label for="pw-to">To</label>
+            <div class="inline-input">
+              <input type="number" id="pw-to" min="0" step="0.1" placeholder="the end">
+              <button class="btn btn-sm" id="pw-pick-to" title="Click a spot on the route">Pick</button>
+            </div>
+            <label for="pw-watts">Target</label>
+            <div class="inline-input">
+              <input type="number" id="pw-watts" min="30" step="5" value="220">
+              <select id="pw-unit" style="width:auto"><option value="w">W</option><option value="pct">% FTP</option></select>
+            </div>
+          </div>
+          <p class="hint" id="pw-preview" style="margin-top:6px"></p>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn btn-sm btn-primary" id="pw-add-btn">Add power target</button>
+            <button class="btn btn-sm" id="pw-climbs" title="A target on every climb of 2 km or more">On every climb…</button>
+          </div>
+        </div>
+        <div id="cue-status"></div>
+      </div>
+
+      <div class="rail-section">
+        <div class="sidebar-section-title">
+          <span>Cue sheet</span>
+          <span class="hint" id="cue-count"></span>
+        </div>
+        <label class="check"><input type="checkbox" id="show-turns"><span>Show turn cues from the router</span></label>
+        <div class="table-scroll">
+          <table class="data cue-table">
+            <thead><tr><th>At</th><th>ETA</th><th>Cue</th><th></th></tr></thead>
+            <tbody id="cue-rows"><tr><td colspan="4" class="table-empty">No cues yet</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="rail-section" id="export-section">
+        <div class="sidebar-section-title"><span>Export</span></div>
+        <div class="btn-row">
+          <button class="btn btn-sm btn-primary" id="export-gpx">GPX</button>
+          <button class="btn btn-sm" id="export-tcx" title="Garmin course with course points">TCX</button>
+          <button class="btn btn-sm" id="export-csv" title="Cue sheet as a spreadsheet">Cue sheet</button>
+          <button class="btn btn-sm" id="export-json" title="Everything, for loading back into RouteLab">JSON</button>
+        </div>
+        <label class="check" style="margin-top:8px"><input type="checkbox" id="export-turns"><span>Include turn cues in the file</span></label>
+        <p class="hint" style="margin-top:6px">
+          <b>GPX</b> puts every cue on the track as a waypoint. <b>TCX</b> writes them as
+          Garmin course points, which Garmin devices treat as cues most reliably.
+        </p>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div class="busy-overlay" id="busy" hidden role="status" aria-live="polite">
+  <div class="busy-card">
+    <div class="busy-spinner" aria-hidden="true"></div>
+    <div>
+      <div class="busy-msg" id="busy-msg">Working…</div>
+      <div class="busy-sub" id="busy-sub"></div>
+    </div>
+  </div>
+</div>
+
+<nav class="mobile-nav">
+  <button class="mobile-tab" data-mpanel="routes">Routes</button>
+  <button class="mobile-tab active" data-mpanel="map">Map</button>
+  <button class="mobile-tab" data-mpanel="cues">Cues</button>
+</nav>
