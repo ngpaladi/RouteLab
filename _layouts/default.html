@@ -91,7 +91,10 @@
             <label for="set-tiles">Map style</label>
             <select id="set-tiles"></select>
           </div>
+          <label class="check" style="margin-top:10px"><input type="checkbox" id="set-trails"><span>Trail ratings over the map (IMBA and S-scale)</span></label>
           <p class="hint" style="margin-top:6px">
+            Trail ratings come from OpenStreetMap through Overpass, which can take half a minute
+            for a new area; they are kept in this browser for a month.
             Map tiles come from the OpenStreetMap community's servers; routes from
             <a href="https://brouter.de" target="_blank" rel="noopener">BRouter</a>; elevation for
             straight lines and imports from <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>;
@@ -140,6 +143,7 @@
   <script src="{{ '/assets/js/Cues.js' | relative_url }}"></script>
   <script src="{{ '/assets/js/Gpx.js' | relative_url }}"></script>
   <script src="{{ '/assets/js/TileMap.js' | relative_url }}"></script>
+  <script src="{{ '/assets/js/Trails.js' | relative_url }}"></script>
   <script src="{{ '/assets/js/Profile.js' | relative_url }}"></script>
   <script src="{{ '/assets/js/Tour.js' | relative_url }}"></script>
   <script src="{{ '/assets/js/app.js' | relative_url }}"></script>
@@ -152,7 +156,7 @@
 
     var $ = function (id) { return document.getElementById(id); };
     var modal = $('settings-modal'), statusEl = $('icu-status'), persistEl = $('icu-persist');
-    var TILES = { osm: 'OpenStreetMap', cyclosm: 'CyclOSM (bike lanes, surfaces)', topo: 'OpenTopoMap (contours)' };
+    var TILES = { cyclosm: 'Cycle map (CyclOSM)', osm: 'Standard (OpenStreetMap)', topo: 'Topographic (OpenTopoMap)' };
 
     function say(el, kind, msg) {
       el.className = 'status status-' + kind;
@@ -181,6 +185,7 @@
       $('set-units').value = s.rlUnits;
       $('set-tiles').value = s.rlTiles;
       $('set-slight').checked = !!s.rlSlightTurns;
+      $('set-trails').checked = s.rlTrails !== false;
       statusEl.style.display = 'none';
       modal.style.display = '';
     }
@@ -228,6 +233,7 @@
     $('set-units').addEventListener('change', function () { Settings.set({ rlUnits: this.value }); fire({ units: true }); });
     $('set-tiles').addEventListener('change', function () { Settings.set({ rlTiles: this.value }); fire({ tiles: true }); });
     $('set-slight').addEventListener('change', function () { Settings.set({ rlSlightTurns: this.checked }); fire({ turns: true }); });
+    $('set-trails').addEventListener('change', function () { Settings.set({ rlTrails: this.checked }); fire({ trails: true }); });
 
     $('data-clear').addEventListener('click', async function () {
       if (!confirm('Delete every route saved in this browser by RouteLab? This cannot be undone.')) return;

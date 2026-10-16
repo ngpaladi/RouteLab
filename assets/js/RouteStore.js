@@ -38,7 +38,8 @@ const Settings = (() => {
     // ── RouteLab only ─────────────────────────────────────────────────────
     rlProfile: 'fastbike',         // BRouter profile for new legs, or 'straight'
     rlUnits: 'km',                 // 'km' | 'mi'
-    rlTiles: 'osm',                // basemap, a key of Map.LAYERS
+    rlTiles: 'cyclosm',            // basemap, a key of TileMap.LAYERS — the cycle map by default
+    rlTrails: true,                // draw trail difficulty ratings over the map
     rlTurnCues: true,              // put the router's turns into the export
     rlSlightTurns: false,          // …including "bear left/right" and keep-left/right
     rlRidePct: 70,                 // % of FTP the time estimate assumes outside power cues
@@ -47,7 +48,7 @@ const Settings = (() => {
     rlWelcomeSeen: false, rlTourDone: false,
   };
 
-  const RESETTABLE = ['rlProfile', 'rlUnits', 'rlTiles', 'rlTurnCues', 'rlSlightTurns', 'rlShowTurns', 'rlRidePct', 'rlMaxDescent'];
+  const RESETTABLE = ['rlProfile', 'rlUnits', 'rlTiles', 'rlTrails', 'rlTurnCues', 'rlSlightTurns', 'rlShowTurns', 'rlRidePct', 'rlMaxDescent'];
 
   let cache = null;
   let memKey = '';

@@ -35,7 +35,7 @@ try {
   check('site builds', fs.existsSync(path.join(SITE, 'index.html')));
   check('about page builds', fs.existsSync(path.join(SITE, 'about.html')));
   check('connect page builds', fs.existsSync(path.join(SITE, 'connect.html')));
-  check('sample route and MTB profile are published', fs.existsSync(path.join(SITE, 'assets/data/sample-route.json')) && fs.existsSync(path.join(SITE, 'assets/data/mtb.brf')));
+  check('sample route and the routing profiles are published', fs.existsSync(path.join(SITE, 'assets/data/sample-route.json')) && ['fastbike', 'trekking', 'gravel', 'mtb'].every(n => fs.existsSync(path.join(SITE, 'assets/data/' + n + '.brf'))));
   check('CLAUDE.md, README and tests are not published', !fs.existsSync(path.join(SITE, 'CLAUDE.md')) && !fs.existsSync(path.join(SITE, 'README.md')) && !fs.existsSync(path.join(SITE, 'test')));
 } catch (err) {
   check('site builds', false, String(err.stderr || err.message).slice(0, 300));
@@ -63,7 +63,13 @@ function makeContext() {
 // ── Fake network ───────────────────────────────────────────────────────────
 const net = { calls: [], uploads: 0 };
 const sample = fs.readFileSync(path.join(ROOT, 'assets/data/sample-route.json'), 'utf8');
-const mtb = fs.readFileSync(path.join(ROOT, 'assets/data/mtb.brf'), 'utf8');
+const brf = name => fs.readFileSync(path.join(ROOT, 'assets/data', name + '.brf'), 'utf8');
+/** Overpass: one blue-square trail running north from wherever the test draws. */
+let overpassWays = [];
+function fakeOverpass() {
+  return { elements: overpassWays.map((g, k) => ({ type: 'way', id: 900 + k, tags: { highway: 'path', name: 'Test Trail ' + k, 'mtb:scale:imba': '2' },
+    geometry: g.map(([lat, lon]) => ({ lat, lon })) })) };
+}
 function resp(status, body, json) {
   return { ok: status >= 200 && status < 300, status, text: async () => body, json: async () => (json !== undefined ? json : JSON.parse(body)) };
 }
@@ -86,8 +92,10 @@ async function fakeFetch(url, opts = {}) {
   url = String(url);
   net.calls.push({ url, method: opts.method || 'GET' });
   if (/sample-route\.json$/.test(url)) return resp(200, sample);
-  if (/mtb\.brf$/.test(url)) return resp(200, mtb);
-  if (/brouter\/profile$/.test(url)) { net.uploads++; return resp(200, '', { profileid: 'custom_test' + net.uploads }); }
+  const m = /assets\/data\/(\w+)\.brf$/.exec(url);
+  if (m) return resp(200, brf(m[1]));
+  if (/brouter\/profile$/.test(url)) { net.uploads++; net.lastProfile = opts.body; return resp(200, '', { profileid: 'custom_test' + net.uploads }); }
+  if (/overpass/.test(url)) { net.overpass = (net.overpass || 0) + 1; return resp(200, '', fakeOverpass()); }
   if (/brouter\?/.test(url)) return resp(200, JSON.stringify(fakeRoute(url)));
   if (/open-meteo\.com\/v1\/elevation/.test(url)) {
     const n = new URL(url).searchParams.get('latitude').split(',').length;
@@ -188,9 +196,9 @@ async function bootPage(file) {
   await sleep(300);
 
   check('no errors on boot', errors.length === 0, errors.join(' | ').slice(0, 400));
-  check('modules present', ['Intervals', 'RouteStore', 'Settings', 'Geo', 'Router', 'Cues', 'Gpx', 'Units', 'TileMap', 'Profile', 'Tour', 'Fit'].every(n => { try { return !!G(n); } catch (_) { return false; } }));
+  check('modules present', ['Intervals', 'RouteStore', 'Settings', 'Geo', 'Router', 'Cues', 'Gpx', 'Units', 'TileMap', 'Trails', 'Profile', 'Tour', 'Fit'].every(n => { try { return !!G(n); } catch (_) { return false; } }));
   check('map canvas mounted', !!document.querySelector('#map-area canvas.tilemap-canvas'));
-  check('map attribution shown', /OpenStreetMap/.test(document.querySelector('.tilemap-attr').textContent));
+  check('cycle map by default, attributed', /CyclOSM/.test(document.querySelector('.tilemap-attr').textContent) && /OpenStreetMap/.test(document.querySelector('.tilemap-attr').textContent));
   check('empty profile prompts to start', $('profile')._ctx.calls.fillText > 0);
   check('terrain picker grouped by discipline', document.querySelectorAll('#route-profile optgroup').length === 4 && $('route-profile').querySelector('option[value="mtb-3"]'));
 
@@ -216,7 +224,7 @@ async function bootPage(file) {
   check('legs are pending until routed', R().legs.every(l => l.kind === 'pending'));
   await settle();
   check('legs come back routed', R().legs.every(l => l.kind === 'route'), R().legs.map(l => l.kind).join(','));
-  check('routing asked BRouter with the road profile', net.calls.some(c => /brouter\?.*profile=fastbike/.test(c.url)));
+  check('routing uploads a road profile that bans sidewalks', net.uploads === 1 && /rl_never/.test(net.lastProfile) && net.calls.some(c => /brouter\?.*profile=custom_test1/.test(c.url)));
   const len1 = App().state.track.length;
   check('stats show the distance', /km/.test($('route-stats').textContent) && len1 > 0, (len1 / 1000).toFixed(2) + ' km');
   check('surface split shown', /Gravel \d+%/.test($('route-stats').textContent) && /Paved/.test($('route-stats').textContent));
@@ -267,12 +275,13 @@ async function bootPage(file) {
   setValue('route-profile', 'mtb-3');
   await settle();
   const after = net.calls.slice(before);
-  check('MTB level uploads its profile', after.some(c => /brouter\/profile$/.test(c.url) && c.method === 'POST'));
-  check('…and routes every leg with it', after.filter(c => /profile=custom_test1/.test(c.url)).length === R().legs.length, after.filter(c => /custom_test/.test(c.url)).length + ' legs');
+  check('MTB level uploads its profile', after.some(c => /brouter\/profile$/.test(c.url) && c.method === 'POST') && /RouteLab: MTB level 3/.test(net.lastProfile));
+  const id = 'custom_test' + net.uploads;
+  check('…and routes every leg with it', after.filter(c => c.url.includes('profile=' + id + '&')).length === R().legs.length, after.filter(c => /custom_test/.test(c.url)).length + ' legs');
   check('terrain hint describes the level', /S3/.test($('terrain-hint').textContent));
   setValue('route-profile', 'gravel-rough');
   await settle();
-  check('rough gravel passes its override', net.calls.some(c => /profile=gravel&.*prefer_unpaved_paths=1/.test(c.url)));
+  check('rough gravel uploads a profile preferring dirt and taking bike lanes', /prefer_unpaved_paths true/.test(net.lastProfile) && /any_cycleway 1\.9 4\.2/.test(net.lastProfile));
   check('terrain is remembered for next time', G('Settings').get('rlProfile') === 'gravel-rough');
   setValue('route-profile', 'straight');
   await settle();
@@ -394,6 +403,43 @@ async function bootPage(file) {
   await settle();
   check('changing terrain re-routes the new leg but keeps the imported line', R().legs[0].kind === 'track' && R().legs[1].kind === 'route');
 
+  section('Map layers and trail ratings');
+  $('layers-btn').click();
+  check('layers panel lists the map styles and the overlay', !$('layer-panel').hidden && $('layer-panel').querySelectorAll('input[name=tiles]').length === 3 && $('layer-trails').checked);
+  const topo = $('layer-panel').querySelector('input[value=topo]');
+  topo.checked = true; topo.dispatchEvent(new window.Event('change', { bubbles: true }));
+  check('switching style from the panel', /OpenTopoMap/.test(document.querySelector('.tilemap-attr').textContent) && G('Settings').get('rlTiles') === 'topo');
+  document.body.click();
+  check('panel closes on an outside click', $('layer-panel').hidden);
+  // Lay a rated trail along the start of the route and pan so it is fetched.
+  const rt = App().state.track;
+  overpassWays = [Array.from({ length: 40 }, (_, k) => [rt.lat[Math.min(rt.n - 1, k * 5)], rt.lon[Math.min(rt.n - 1, k * 5)]])];
+  G('Trails').clearCache();
+  map.setView(rt.lat[0], rt.lon[0], 14);
+  await sleep(500);
+  for (let k = 0; k < 20 && G('Trails').status().loading; k++) await sleep(50);
+  await sleep(100);
+  check('trail ratings fetched from Overpass for the view', net.overpass >= 1);
+  check('legend shown', !$('trail-legend').hidden && /Trail ratings/.test($('trail-legend').textContent) && /Blue/.test($('trail-legend').textContent));
+  check('the route rides a rated trail', (App().state.trailRuns || []).length >= 1 && /Test Trail 0/.test($('route-stats').textContent), (App().state.trailRuns || []).length + ' runs');
+  check('hardest rating named', /hardest: .*Blue square/.test($('route-stats').textContent));
+  const p0 = map.project(overpassWays[0][10][0], overpassWays[0][10][1]);
+  const c = App().map.canvas;
+  c.dispatchEvent(pointer('pointermove', p0.x + 30, p0.y + 30));
+  c.dispatchEvent(pointer('pointermove', p0.x, p0.y));
+  check('hovering a trail or cue shows a tooltip', !$('map-tip').hidden && /Test Trail 0|Blue square|·/.test($('map-tip').textContent), $('map-tip').textContent.slice(0, 80));
+  const nCues = R().cues.length;
+  $('trail-cues-btn').click();
+  const tc = R().cues.filter(x => x.type === 'trail');
+  check('Add trail cues puts the rating in the cue', tc.length >= 1 && /^BLU Test Trail 0/.test(tc[0].label) && R().cues.length === nCues + tc.length, tc.map(x => x.label).join());
+  $('trail-cues-btn').click();
+  check('…and again replaces rather than duplicates', R().cues.filter(x => x.type === 'trail').length === tc.length);
+  $('layers-btn').click();
+  $('layer-trails').checked = false; $('layer-trails').dispatchEvent(new window.Event('change', { bubbles: true }));
+  check('turning the overlay off hides the legend and the trail list', $('trail-legend').hidden && !/Rated trails/.test($('route-stats').textContent));
+  $('layer-trails').checked = true; $('layer-trails').dispatchEvent(new window.Event('change', { bubbles: true }));
+  document.body.click();
+
   section('Search and settings');
   setValue('search-input', 'Fairfax');
   $('search-input').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
@@ -410,8 +456,10 @@ async function bootPage(file) {
   setValue('set-units', 'km');
   setValue('set-ftp', '300');
   check('FTP is shared and marked as set by you', G('Settings').get('ftp') === 300 && G('Settings').get('ftpUserSet') === true);
+  setValue('set-tiles', 'osm');
   setValue('set-tiles', 'cyclosm');
   check('map style switches', /CyclOSM/.test(document.querySelector('.tilemap-attr').textContent));
+  check('trail overlay in settings too', $('set-trails').checked === true);
   setValue('set-slight', true); $('set-slight').checked = true; $('set-slight').dispatchEvent(new window.Event('change'));
   check('slight turns setting saved', G('Settings').get('rlSlightTurns') === true);
   $('settings-close').click();

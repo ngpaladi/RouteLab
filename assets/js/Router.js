@@ -19,17 +19,24 @@
  * elevation from Open-Meteo's keyless elevation API instead.
  *
  * Terrain. A route's `profile` is one of TERRAIN's keys, not a raw BRouter
- * profile name. Road and gravel are stock BRouter profiles, with URL
- * overrides (`profile:name=value`, which BRouter accepts for any variable a
- * profile assigns). The mountain-bike skill levels need more than an
- * override: BRouter's stock mtb profile prices trails by their OSM
- * `mtb:scale` grade with one fixed table, and ignores `sac_scale`. So each
- * level is that profile (bundled as assets/data/mtb.brf, MIT, from BRouter)
- * with the table rewritten for the rider: grades within the skill are cheap,
- * the top of it costs a little, anything above is 9000 (BRouter's "don't").
- * The rewritten profile is POSTed to brouter.de/brouter/profile, which
- * returns a `custom_…` id to route with. Uploaded profiles don't live
- * forever on the server, so a failed request with one re-uploads once.
+ * profile name. Every level routes with its own copy of a stock BRouter
+ * profile (bundled in assets/data/*.brf, MIT, from BRouter), rewritten here
+ * and POSTed to brouter.de/brouter/profile, which returns a `custom_…` id to
+ * route with. The rewrites:
+ *
+ *   · all levels — never a sidewalk (footway=sidewalk), a footway crossing
+ *     without bike access, or anything tagged bicycle=no. Cost 10000 is
+ *     BRouter's "impassable", which also stops it attaching a clicked point
+ *     to the sidewalk beside the road you clicked.
+ *   · gravel — a main road with a bike lane costs about what a residential
+ *     street does. Stock gravel prices Beacon Street (secondary, lanes both
+ *     ways) at nearly twice a back street, so it zig-zags round it.
+ *   · MTB levels — the mtb:scale table rewritten per skill level, a
+ *     sac_scale penalty added, foot-only ways forbidden.
+ *
+ * Uploaded profiles don't live forever on the server, so a failed request
+ * with one re-uploads once. If the upload itself fails, the leg is routed with
+ * the stock profile and marked `fallback`, so the app can say so.
  */
 const Router = (() => {
   const BROUTER = 'https://brouter.de/brouter';
@@ -44,21 +51,21 @@ const Router = (() => {
    */
   const TERRAIN = {
     // hint: one line under the picker saying what this level will and won't ride.
-    fastbike:       { name: 'Paved roads',              group: 'Road',          brouter: 'fastbike', crr: 0,
+    fastbike:       { name: 'Paved roads',              group: 'Road',          template: 'fastbike', crr: 0,
       hint: 'Fastest paved roads; stays off dirt.' },
-    trekking:       { name: 'Quiet roads & bike paths', group: 'Road',          brouter: 'trekking', crr: 0.002,
+    trekking:       { name: 'Quiet roads & bike paths', group: 'Road',          template: 'trekking', crr: 0.002,
       hint: 'Bike paths and quiet roads, including smooth unpaved paths.' },
-    gravel:         { name: 'Smooth gravel',            group: 'Gravel',        brouter: 'gravel',   crr: 0.005,
-      hint: 'Gravel roads and good tracks where they fit; pavement where it doesn’t.' },
-    'gravel-rough': { name: 'Rough gravel & dirt',      group: 'Gravel',        brouter: 'gravel',   crr: 0.008, params: { prefer_unpaved_paths: 1 },
+    gravel:         { name: 'Smooth gravel',            group: 'Gravel',        template: 'gravel',   crr: 0.005, lanes: true,
+      hint: 'Gravel roads and good tracks where they fit; pavement (bike lanes welcome) where they don’t.' },
+    'gravel-rough': { name: 'Rough gravel & dirt',      group: 'Gravel',        template: 'gravel',   crr: 0.008, lanes: true, params: { prefer_unpaved_paths: true },
       hint: 'Seeks out unpaved roads, tracks and dirt. Slower, but off the tarmac.' },
-    'mtb-1':        { name: 'Beginner · S0–S1',         group: 'Mountain bike', mtb: 1, crr: 0.010,
+    'mtb-1':        { name: 'Beginner · S0–S1',         group: 'Mountain bike', template: 'mtb', mtb: 1, crr: 0.010,
       hint: 'Smooth singletrack: roots and small rocks at most (S0–S1). No S2 or harder.' },
-    'mtb-2':        { name: 'Intermediate · up to S2',  group: 'Mountain bike', mtb: 2, crr: 0.012,
+    'mtb-2':        { name: 'Intermediate · up to S2',  group: 'Mountain bike', template: 'mtb', mtb: 2, crr: 0.012,
       hint: 'Up to S2: bigger rocks, steps, tight switchbacks. No S3 or alpine trails.' },
-    'mtb-3':        { name: 'Advanced · up to S3',      group: 'Mountain bike', mtb: 3, crr: 0.014,
+    'mtb-3':        { name: 'Advanced · up to S3',      group: 'Mountain bike', template: 'mtb', mtb: 3, crr: 0.014,
       hint: 'Up to S3: blocky, steep and technical. No S4 or harder.' },
-    'mtb-4':        { name: 'Expert · up to S4',        group: 'Mountain bike', mtb: 4, crr: 0.016,
+    'mtb-4':        { name: 'Expert · up to S4',        group: 'Mountain bike', template: 'mtb', mtb: 4, crr: 0.016,
       hint: 'Up to S4: very steep, technical switchbacks. Only S5–S6 are off-limits.' },
     straight:       { name: 'Straight line',            group: 'Other',         crr: 0.002,
       hint: 'Exactly where you click, for trails the router doesn’t know.' },
@@ -116,30 +123,91 @@ const Router = (() => {
     return out;
   }
 
-  let templateUrl = 'assets/data/mtb.brf';
-  let templateText = null;
-  const uploaded = new Map();   // level → Promise<profile id>
+  /** Never a sidewalk: appended to the way context of every profile. */
+  function noSidewalks(text) {
+    const at = text.indexOf('---context:node');
+    if (at < 0) throw new Error('A bundled routing profile has changed shape; no node context.');
+    const rule =
+      '# RouteLab: never a sidewalk, a footway crossing without bike access, or a way closed to bikes.\n' +
+      'assign rl_never or footway=sidewalk or bicycle=no and footway=crossing not bicycle=yes|designated|permissive\n' +
+      'assign costfactor switch rl_never 10000 costfactor\n\n';
+    return text.slice(0, at) + rule + text.slice(at);
+  }
 
-  function setTemplateUrl(u) { templateUrl = u; }
+  /** Gravel: a main road with a bike lane is priced like a residential street. */
+  function bikeLanes(text) {
+    // Three places price a main road: its base cost, a 1.8× "no maxspeed tag"
+    // penalty on primary/secondary, and a 400 charge for joining one. With a
+    // lane, all three go: slightly under a residential street (2.2), because
+    // the main road is usually the direct line.
+    const rows = [
+      [/(switch +highway=primary\|primary_link +)4\.8/, '$1switch any_cycleway 2.0 4.8'],
+      [/(switch +highway=secondary\|secondary_link +)4\.2/, '$1switch any_cycleway 1.9 4.2'],
+      [/(switch +highway=tertiary\|tertiary_link +)3\.6/, '$1switch any_cycleway 1.9 3.6'],
+      [/switch highway=primary\|secondary 1\.8 1\.0/, 'switch and highway=primary|secondary not any_cycleway 1.8 1.0'],
+      [/switch is_main_road 400/, 'switch and is_main_road not any_cycleway 400'],
+    ];
+    for (const [re, to] of rows) {
+      if (!re.test(text)) throw new Error('The bundled gravel profile has changed shape; main-road costs not found.');
+      text = text.replace(re, to);
+    }
+    return text;
+  }
 
-  async function customProfile(level, fresh) {
-    if (!fresh && uploaded.has(level)) return uploaded.get(level);
+  /** Bake `profile:` overrides into the text rather than trusting URL overrides on a custom profile. */
+  function withParams(text, params) {
+    for (const [k, v] of Object.entries(params || {})) {
+      const re = new RegExp('(assign\\s+' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*=?\\s*)\\S+');
+      if (!re.test(text)) throw new Error('The routing profile has no ' + k + '.');
+      text = text.replace(re, '$1' + v);
+    }
+    return text;
+  }
+
+  /** The full profile text a terrain level routes with. */
+  function profileText(template, key) {
+    const T = terrain(key);
+    let out = T.mtb ? mtbProfile(template, T.mtb) : template;
+    if (T.lanes) out = bikeLanes(out);
+    out = withParams(out, T.params);
+    return noSidewalks(out);
+  }
+
+  let templateBase = 'assets/data/';
+  const templates = new Map();  // name → Promise<text>
+  const uploaded = new Map();   // terrain key → Promise<profile id>
+
+  function setTemplateBase(u) { templateBase = u.replace(/[^/]*$/, ''); }
+
+  function templateFor(name) {
+    if (!templates.has(name)) {
+      const p = fetch(templateBase + name + '.brf').then(res => {
+        if (!res.ok) throw new Error('Could not load the ' + name + ' routing profile (HTTP ' + res.status + ').');
+        return res.text();
+      });
+      templates.set(name, p);
+      p.catch(() => templates.delete(name));
+    }
+    return templates.get(name);
+  }
+
+  async function customProfile(key, fresh) {
+    if (!fresh && uploaded.has(key)) return uploaded.get(key);
+    const T = terrain(key);
     const p = (async () => {
-      if (!templateText) {
-        const res = await fetch(templateUrl);
-        if (!res.ok) throw new Error('Could not load the MTB routing profile (HTTP ' + res.status + ').');
-        templateText = await res.text();
-      }
+      const text = profileText(await templateFor(T.template), key);
       let res;
       try {
-        res = await fetch(PROFILE_UPLOAD, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: mtbProfile(templateText, level) });
+        res = await fetch(PROFILE_UPLOAD, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text });
       } catch (_) { throw new Error('Could not reach the router (brouter.de). Check your connection.'); }
       const body = await res.json().catch(() => ({}));
-      if (!res.ok || !body.profileid) throw new Error('The router rejected the MTB profile' + (body.error ? ': ' + body.error : '.'));
+      // brouter.de answers a profile that fails to parse with an id *and* an
+      // error; routing with that id fails later and less clearly.
+      if (!res.ok || !body.profileid || body.error) throw new Error('The router rejected the profile' + (body.error ? ': ' + body.error : '.'));
       return body.profileid;
     })();
-    uploaded.set(level, p);
-    p.catch(() => uploaded.delete(level));
+    uploaded.set(key, p);
+    p.catch(() => uploaded.delete(key));
     return p;
   }
 
@@ -163,15 +231,23 @@ const Router = (() => {
    */
   async function leg(a, b, profile, { signal } = {}) {
     const T = terrain(profile);
-    if (!T.brouter && !T.mtb) return straight(a, b);
+    if (!T.template) return straight(a, b);
     const key = cacheKey(a, b, profile);
     if (cache.has(key)) return clone(cache.get(key));
 
+    let fallback = false;
     const ask = async fresh => {
-      const name = T.mtb ? await customProfile(T.mtb, fresh) : T.brouter;
-      let q = 'lonlats=' + r6(a.lon) + ',' + r6(a.lat) + '|' + r6(b.lon) + ',' + r6(b.lat) +
-        '&profile=' + encodeURIComponent(name) + '&alternativeidx=0&format=geojson&timode=2';
-      for (const [k, v] of Object.entries(T.params || {})) q += '&profile:' + encodeURIComponent(k) + '=' + encodeURIComponent(v);
+      let name, extra = '';
+      try {
+        name = await customProfile(terrainKey(profile), fresh);
+      } catch (err) {
+        // Route anyway with the stock profile, and say so.
+        fallback = true;
+        name = T.template;
+        for (const [k, v] of Object.entries(T.params || {})) extra += '&profile:' + encodeURIComponent(k) + '=' + (v === true ? 1 : v === false ? 0 : encodeURIComponent(v));
+      }
+      const q = 'lonlats=' + r6(a.lon) + ',' + r6(a.lat) + '|' + r6(b.lon) + ',' + r6(b.lat) +
+        '&profile=' + encodeURIComponent(name) + '&alternativeidx=0&format=geojson&timode=2' + extra;
       let res;
       try {
         res = await fetch(BROUTER + '?' + q, { signal });
@@ -184,13 +260,16 @@ const Router = (() => {
 
     let { res, body } = await ask(false);
     // An uploaded profile can expire on the server; upload it again, once.
-    if (T.mtb && (!res.ok || !/^\s*\{/.test(body)) && !/not mapped|no track found/i.test(body)) ({ res, body } = await ask(true));
+    if (!fallback && (!res.ok || !/^\s*\{/.test(body)) && !/not mapped|no track found/i.test(body)) ({ res, body } = await ask(true));
     if (!res.ok) throw new Error(routerMessage(body, res.status));
     let gj;
     try { gj = JSON.parse(body); } catch (_) { throw new Error(routerMessage(body, res.status)); }
     const out = fromGeoJson(gj);
-    if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
-    cache.set(key, out);
+    if (fallback) out.fallback = true;
+    else {
+      if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
+      cache.set(key, out);
+    }
     return clone(out);
   }
 
@@ -297,13 +376,14 @@ const Router = (() => {
   function clone(x) {
     const out = { coords: x.coords.map(c => c.slice()), hints: x.hints.map(h => h.slice()), kind: x.kind };
     if (x.surface) out.surface = { ...x.surface };
+    if (x.fallback) out.fallback = true;
     return out;
   }
   function clearCache() { cache.clear(); }
 
   return {
-    leg, straight, elevate, geocode, fromGeoJson, clearCache, setTemplateUrl,
-    terrain, terrainKey, mtbProfile, surfaceOf, classify,
+    leg, straight, elevate, geocode, fromGeoJson, clearCache, setTemplateBase,
+    terrain, terrainKey, mtbProfile, profileText, noSidewalks, bikeLanes, surfaceOf, classify,
     PROFILES, TERRAIN, MTB_LEVELS, CMD, SCALE_ORDER,
   };
 })();

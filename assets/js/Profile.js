@@ -131,6 +131,17 @@ const Profile = (() => {
         ctx.fillText('No elevation for this route', PAD.l + 6, PAD.t + 12);
       }
 
+      // Rated trails: a band along the bottom in the trail's colour.
+      for (const x of st.trails || []) {
+        const x0 = X(x.fromM), x1 = X(x.toM);
+        ctx.fillStyle = x.r.rating.color;
+        ctx.fillRect(x0, PAD.t + ph - 5, Math.max(2, x1 - x0), 5);
+        // White and black signs vanish against the fill or the dark page without an edge.
+        if (x.r.key === 'white' || x.r.key === 'black' || x.r.key === 'double') {
+          ctx.strokeStyle = '#c9d1d9'; ctx.lineWidth = 1; ctx.strokeRect(x0 + 0.5, PAD.t + ph - 5.5, Math.max(2, x1 - x0) - 1, 5);
+        }
+      }
+
       // Cue markers along the top.
       for (const c of st.cues || []) {
         const ty = Cues.TYPES[c.type];
@@ -154,8 +165,10 @@ const Profile = (() => {
         const a = RouteStore.positionAt(t, Math.max(0, hoverM - 50)), b = RouteStore.positionAt(t, Math.min(t.length, hoverM + 50));
         const g = t.hasEle && b.d - a.d > 1 ? (b.ele - a.ele) / (b.d - a.d) : NaN;
         const eta = st.times ? Cues.timeAt(t, st.times, hoverM) : NaN;
+        const on = (st.trails || []).find(x => hoverM >= x.fromM && hoverM <= x.toM);
         const txt = Units.dist(hoverM, U) + (t.hasEle ? ' · ' + Units.ele(p.ele, U) : '') +
-          (isFinite(g) ? ' · ' + (g * 100).toFixed(1) + '%' : '') + (isFinite(eta) ? ' · ' + Units.duration(eta) : '');
+          (isFinite(g) ? ' · ' + (g * 100).toFixed(1) + '%' : '') + (isFinite(eta) ? ' · ' + Units.duration(eta) : '') +
+          (on ? ' · ' + (on.way.n || 'trail') + ' (' + on.r.rating.short + ')' : '');
         ctx.font = '11px -apple-system, sans-serif';
         const w = ctx.measureText(txt).width + 10;
         const bx = Math.min(W - PAD.r - w, Math.max(PAD.l, x + 6));

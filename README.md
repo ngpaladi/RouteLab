@@ -28,6 +28,18 @@ your FTP and weight, and the intervals.icu key.
   route on anything harder. Trails tagged for foot traffic only are avoided. The route
   shows its own split: % paved, gravel and trail, and the hardest graded
   trail on it.
+- **Never a sidewalk**: every level bans sidewalks, footway crossings without bike
+  access, and anything tagged `bicycle=no`, so a click beside a road attaches to
+  the road. The gravel levels treat a main road with a bike lane like a quiet
+  street, rather than zig-zagging round it.
+- **Trail ratings on the map**: IMBA signs (white/green circle, blue square,
+  black and double black diamond) from `mtb:scale:imba`, and the S-scale shown
+  in the nearest sign's colour where that's all there is. Hover a trail for its
+  name and grade; trails closed to bikes are dashed. The rated trails your route
+  rides are listed with the hardest one, banded on the elevation profile, and can
+  be added as cues ("BLK Wood Rat").
+- **The cycle map** (CyclOSM) by default: bike lanes, surfaces and trails. Standard
+  and topographic maps are in the layers menu, along with the trail overlay.
 - **Cues**: one at a time (eat, drink, note, danger, summit, water stop), as a
   repeating series ("eat every 20 km from km 15"), or as a **power target**
   held from one distance to another, in watts or % of FTP. **On every climb**
@@ -95,13 +107,15 @@ assets/js/
   Router.js      — BRouter legs, terrain levels, MTB profile upload, surfaces, elevation, search
   Cues.js        — turn cues, series, power targets, climbs, the timing model
   Gpx.js         — GPX/TCX import, GPX/TCX/CSV export, Units
-  TileMap.js     — canvas slippy map: tiles, pan, zoom, pinch, overlay hook
+  TileMap.js     — canvas slippy map: tiles (faded in), pan, zoom, pinch, scale bar, overlay hook
+  Trails.js      — IMBA / S-scale trail ratings from Overpass: tiles, cache, backoff, route matching
   Profile.js     — the elevation profile
   Tour.js        — welcome dialog and walkthrough (shared, byte-identical)
   app.js         — UI state, editing, undo, rendering
 assets/data/
   sample-route.json — the sample loop (and test fixture)
-  mtb.brf           — BRouter's mtb profile, the template for the skill levels (MIT, BRouter contributors)
+  fastbike.brf, trekking.brf, gravel.brf, mtb.brf
+                    — BRouter's stock profiles, the templates every terrain level is built from (MIT, BRouter contributors)
 ```
 
 ### The route model
@@ -118,12 +132,27 @@ every build, so they follow the road.
 
 ### Terrain
 
-Road and gravel levels are stock BRouter profiles, with `profile:name=value`
-URL overrides where needed. The MTB levels are BRouter's `mtb` profile with
-its `mtb:scale` pricing rewritten per level, a `sac_scale` penalty added,
-foot-only ways forbidden, and roughness weighted down as skill goes up. Each
-level is uploaded once per session to `brouter.de/brouter/profile`, and
-uploaded again if the server has dropped it.
+Every level routes with its own copy of a stock BRouter profile, rewritten in
+`Router.profileText` and uploaded once per session to
+`brouter.de/brouter/profile` (and again if the server has dropped it):
+
+- **all levels**: a rule at the end of the way context makes sidewalks,
+  footway crossings without bike access and `bicycle=no` ways impassable;
+- **gravel**: main roads with a bike lane lose their base surcharge, the 1.8×
+  "no speed limit tagged" penalty and the cost of joining one;
+- **MTB**: the `mtb:scale` pricing rewritten per level, a `sac_scale` penalty,
+  foot-only ways forbidden, roughness weighted down as skill goes up.
+
+If an upload is refused, that leg uses the stock profile and the app says so.
+
+### Trail ratings
+
+BRouter's lookup table has no `mtb:scale:imba`, so IMBA grades can't steer the
+router; they come from Overpass instead, per z11 tile (~15 km), one request at
+a time, visible area first, cached in localStorage for 30 days. The public
+Overpass servers are often at capacity; failed areas are retried with
+exponential backoff and the legend says so. A route "rides" a trail where its
+points are within 12 m of it and running the same way within 35°.
 
 ## Storage, shared with CritLab and CrossLab
 
@@ -131,6 +160,8 @@ uploaded again if the server has dropped it.
 |---|---|---|---|
 | `cl-settings` | localStorage | preferences; `ftp`, `mass`, `cda`, `crr` are shared, `rl*` keys are RouteLab's | yes |
 | `cl-icu-key` | local/sessionStorage | the intervals.icu key, in its own slot | yes |
+| `rl-view`, `rl-current` | localStorage | map position and open route | no |
+| `rl-trails-*` | localStorage | cached trail ratings, 30 days | no |
 | `routelab` / `routes` | IndexedDB | saved routes with their cues | no — own database |
 
 RouteLab's reset clears only `rl*` keys.
@@ -138,7 +169,8 @@ RouteLab's reset clears only `rl*` keys.
 ## Privacy
 
 Static page. Map tiles come from the OpenStreetMap community tile servers.
-Each leg's two endpoints go to brouter.de. Open-Meteo is asked for elevation
+Each leg's two endpoints go to brouter.de. Overpass sees the areas you look at
+with the trail overlay on, and the area around your route. Open-Meteo is asked for elevation
 only for straight-line legs and imports without any. Nominatim sees what you
 search for. The intervals.icu key goes only to intervals.icu.
 

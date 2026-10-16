@@ -22,18 +22,18 @@ const TileMap = (() => {
   const T = 256;
 
   const LAYERS = {
-    osm: {
-      name: 'OpenStreetMap',
-      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', max: 19,
-      attr: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
-    },
     cyclosm: {
-      name: 'CyclOSM (bike lanes, surfaces)',
+      name: 'Cycle map (CyclOSM)',
       url: 'https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png', sub: 'abc', max: 20,
       attr: '<a href="https://www.cyclosm.org" target="_blank" rel="noopener">CyclOSM</a> · © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
     },
+    osm: {
+      name: 'Standard (OpenStreetMap)',
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', max: 19,
+      attr: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
+    },
     topo: {
-      name: 'OpenTopoMap (contours)',
+      name: 'Topographic (OpenTopoMap)',
       url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', sub: 'abc', max: 17,
       attr: '© <a href="https://opentopomap.org" target="_blank" rel="noopener">OpenTopoMap</a> (CC-BY-SA) · © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
     },
@@ -96,7 +96,7 @@ const TileMap = (() => {
       let t = tiles.get(key);
       if (!t && load) {
         t = { img: new Image(), ok: false };
-        t.img.onload = () => { t.ok = true; redraw(); };
+        t.img.onload = () => { t.ok = true; t.at = now(); redraw(); };
         t.img.onerror = () => { t.failed = true; };
         t.img.src = tileUrl(tz, tx, ty);
         tiles.set(key, t);
@@ -105,11 +105,16 @@ const TileMap = (() => {
       return t;
     }
 
+    function now() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
+
     function draw() {
       pending = false;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.fillStyle = '#e8e4dc';
       ctx.fillRect(0, 0, W, H);
+      let fading = false;
       const tz = Math.max(0, Math.min(layer.max, Math.round(z)));
       const k = Math.pow(2, z - tz), size = T * k;
       const c = toWorld(lat, lon, tz);
@@ -123,7 +128,9 @@ const TileMap = (() => {
           const tx = ((ix % n) + n) % n;
           const sx = ix * size - x0, sy = iy * size - y0;
           const t = tile(tz, tx, iy, true);
-          if (t && t.ok) { ctx.drawImage(t.img, sx, sy, size + 0.5, size + 0.5); continue; }
+          // Fade a new tile in over its parent rather than popping it in.
+          const alpha = t && t.ok ? Math.min(1, (now() - (t.at || 0)) / 200) : 0;
+          if (alpha >= 1) { ctx.drawImage(t.img, sx, sy, size + 0.5, size + 0.5); continue; }
           // Parent stand-in while this one loads.
           for (let up = 1; up <= 3 && tz - up >= 0; up++) {
             const f = 1 << up;
@@ -134,9 +141,43 @@ const TileMap = (() => {
               break;
             }
           }
+          if (alpha > 0) {
+            ctx.globalAlpha = alpha;
+            ctx.drawImage(t.img, sx, sy, size + 0.5, size + 0.5);
+            ctx.globalAlpha = 1;
+            fading = true;
+          }
         }
       }
       if (h.onDraw) h.onDraw(ctx, api);
+      scaleBar();
+      if (fading) redraw();
+    }
+
+    /** A metric or imperial scale bar, bottom left, at a round length. */
+    function scaleBar() {
+      const mi = typeof h.units === 'function' && h.units() === 'mi';
+      const mpp = 40075016.686 * Math.cos(lat * Math.PI / 180) / (T * Math.pow(2, z));   // metres per CSS pixel
+      // Round lengths, in metres, with their labels.
+      const steps = mi
+        ? [10, 20, 50, 100, 200, 500, 1000, 2000].map(ft => [ft * 0.3048, ft + ' ft'])
+            .concat([1, 2, 5, 10, 20, 50, 100].map(v => [v * 1609.344, v + ' mi']))
+        : [5, 10, 20, 50, 100, 200, 500].map(m => [m, m + ' m'])
+            .concat([1, 2, 5, 10, 20, 50, 100, 200].map(v => [v * 1000, v + ' km']));
+      let best = null;
+      for (const [m, label] of steps) {
+        const len = m / mpp;
+        if (len > 110) break;
+        best = { len, label };
+      }
+      if (!best || best.len < 20) return;
+      const x = 10, y = H - 12;
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillRect(x - 4, y - 16, best.len + 8, 20);
+      ctx.strokeStyle = '#222'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x, y - 5); ctx.lineTo(x, y); ctx.lineTo(x + best.len, y); ctx.lineTo(x + best.len, y - 5); ctx.stroke();
+      ctx.fillStyle = '#222'; ctx.font = '10px -apple-system, sans-serif';
+      ctx.fillText(best.label, x + 2, y - 6);
     }
 
     function redraw() {
@@ -262,13 +303,17 @@ const TileMap = (() => {
     else window.addEventListener('resize', () => { size(); redraw(); });
 
     size();
-    setLayer('osm');
+    setLayer('cyclosm');
 
     const api = {
       canvas, project, unproject, setView, zoomAt, fitBounds, setLayer, redraw,
       resize() { size(); redraw(); },
       zoomBy(dz) { zoomAt(dz, W / 2, H / 2); },
       view: () => ({ lat, lon, z }),
+      bounds() {
+        const a = unproject(0, 0), b = unproject(W, H);
+        return { s: b.lat, w: a.lon, n: a.lat, e: b.lon };
+      },
       get width() { return W; }, get height() { return H; },
     };
     return api;

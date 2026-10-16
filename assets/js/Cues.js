@@ -27,6 +27,7 @@ const Cues = (() => {
     danger:   { name: 'Danger',       tcx: 'Danger',   color: '#d03b3b', glyph: '!' },
     summit:   { name: 'Summit',       tcx: 'Summit',   color: '#199e70', glyph: '▲' },
     water:    { name: 'Water stop',   tcx: 'Water',    color: '#3987e5', glyph: 'H' },
+    trail:    { name: 'Trail',        tcx: 'Generic',  color: '#1c6fd6', glyph: 'T' },
     left:     { name: 'Left',         tcx: 'Left',     color: '#e6edf3', glyph: '←', turn: true },
     right:    { name: 'Right',        tcx: 'Right',    color: '#e6edf3', glyph: '→', turn: true },
     straight: { name: 'Straight',     tcx: 'Straight', color: '#e6edf3', glyph: '↑', turn: true },

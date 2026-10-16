@@ -40,12 +40,12 @@ sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 
-for (const f of ['Intervals.js', 'RouteStore.js', 'Router.js', 'Cues.js', 'Gpx.js']) {
+for (const f of ['Intervals.js', 'RouteStore.js', 'Router.js', 'Cues.js', 'Gpx.js', 'Trails.js']) {
   vm.runInContext(fs.readFileSync(path.join(JS, f), 'utf8') + '\n;globalThis.__last = true;', sandbox, { filename: f });
 }
 const G = name => vm.runInContext(name, sandbox);
 const RouteStore = G('RouteStore'), Geo = G('Geo');
-const Router = G('Router'), Cues = G('Cues'), Gpx = G('Gpx'), Units = G('Units');
+const Router = G('Router'), Cues = G('Cues'), Gpx = G('Gpx'), Units = G('Units'), Trails = G('Trails');
 
 let passed = 0, failed = 0;
 const failures = [];
@@ -226,6 +226,22 @@ check('a changed template is refused, not silently ignored', bad);
 check('old profile names still resolve', Router.terrainKey('mtb') === 'mtb-2' && Router.terrainKey('nope') === 'fastbike');
 check('every terrain has a hint and a group', Object.values(Router.TERRAIN).every(v => v.hint && v.group));
 
+section('Every routed level: no sidewalks; gravel takes bike lanes');
+const brf = name => fs.readFileSync(path.join(ROOT, 'assets', 'data', name + '.brf'), 'utf8');
+for (const [k, T] of Object.entries(Router.TERRAIN)) {
+  if (!T.template) continue;
+  const txt = Router.profileText(brf(T.template), k);
+  const at = txt.indexOf('assign rl_never'), node = txt.indexOf('---context:node');
+  check(k + ': sidewalk ban in the way context', at > 0 && at < node && /assign costfactor switch rl_never 10000 costfactor/.test(txt) && /footway=sidewalk/.test(txt.slice(at, node)));
+}
+const g = Router.profileText(brf('gravel'), 'gravel');
+check('gravel prices laned main roads like a back street', /highway=secondary\|secondary_link +switch any_cycleway 1\.9 4\.2/.test(g) && /highway=primary\|primary_link +switch any_cycleway 2\.0 4\.8/.test(g));
+check('…without the no-maxspeed or joining penalties', /switch and highway=primary\|secondary not any_cycleway 1\.8 1\.0/.test(g) && /switch and is_main_road not any_cycleway 400/.test(g));
+check('rough gravel bakes in prefer_unpaved_paths', /assign prefer_unpaved_paths true/.test(Router.profileText(brf('gravel'), 'gravel-rough')) && /assign prefer_unpaved_paths false/.test(g));
+check('road profiles are not given the gravel lane rewrite', !/any_cycleway 1\.9/.test(Router.profileText(brf('fastbike'), 'fastbike')));
+let shape = false; try { Router.noSidewalks('assign x 1'); } catch (_) { shape = true; }
+check('a template without a node context is refused', shape);
+
 const msgs = [
   ['Longitude', 'Latitude', 'Elevation', 'Distance', 'CostPerKm', 'ElevCost', 'TurnCost', 'NodeCost', 'InitialCost', 'WayTags', 'NodeTags', 'Time', 'Energy'],
   ['0', '0', '0', '100', '', '', '', '', '', 'highway=residential', '', '', ''],
@@ -242,14 +258,57 @@ const withSurface = { ...route, legs: route.legs.map((l, k) => k === 0 ? { ...l,
 const ts = RouteStore.build(withSurface).surface;
 check('a leg without a summary counts as unknown in the route total', ts && ts.paved === 120 && ts.unknown > 60000);
 
+section('Trail ratings');
+// A straight north-south trail, a crossing east-west one, and junk to ignore.
+const overpass = { elements: [
+  { type: 'way', id: 1, tags: { highway: 'path', name: 'Flow Line', 'mtb:scale:imba': '2', 'mtb:scale': '1' },
+    geometry: [{ lat: 40.000, lon: -105.000 }, { lat: 40.005, lon: -105.000 }, { lat: 40.010, lon: -105.000 }] },
+  { type: 'way', id: 2, tags: { highway: 'path', name: 'Rock Garden', 'mtb:scale': '3' },
+    geometry: [{ lat: 40.005, lon: -105.004 }, { lat: 40.005, lon: -104.996 }] },
+  { type: 'way', id: 3, tags: { highway: 'path', name: 'Hikers Only', 'mtb:scale': '1', bicycle: 'no' },
+    geometry: [{ lat: 40.02, lon: -105.01 }, { lat: 40.03, lon: -105.01 }] },
+  { type: 'way', id: 4, tags: { highway: 'path', 'mtb:scale': 'difficult' }, geometry: [{ lat: 40, lon: -105 }, { lat: 40.1, lon: -105 }] },
+  { type: 'node', id: 5, lat: 40, lon: -105 },
+] };
+const ways = Trails.parse(overpass);
+check('parses rated ways, skips junk grades and nodes', ways.length === 3 && ways.every(w => w.g.length >= 4), ways.map(w => w.id).join(','));
+check('IMBA wins over the S grade', Trails.rate(ways[0]).key === 'blue' && /IMBA 2/.test(Trails.rate(ways[0]).label) && /S1/.test(Trails.rate(ways[0]).label));
+check('S grade alone maps to the nearest sign, labelled as S', Trails.rate(ways[1]).key === 'double' && /^S3/.test(Trails.rate(ways[1]).label));
+check('closed-to-bikes is kept', ways[2].b === 1);
+check('S0 green, S2 black, S5 pro', Trails.rate({ s: '0' }).key === 'green' && Trails.rate({ s: '2' }).key === 'black' && Trails.rate({ s: '5' }).key === 'pro');
+check('every IMBA grade has a sign', [0, 1, 2, 3, 4].map(i => Trails.rate({ i }).key).join() === 'white,green,blue,black,double');
+const tk = Trails.tileOf(40.005, -105.0);
+const tb = Trails.boundsOf(tk.x, tk.y);
+check('tile bounds contain the point', tb.s < 40.005 && tb.n > 40.005 && tb.w < -105 && tb.e > -105);
+Trails.tiles.set(tk.x + '/' + tk.y, { ways });
+check('waysIn finds loaded ways', Trails.waysIn(39.99, -105.02, 40.04, -104.99).length === 3);
+// A route that rides Flow Line north, crossing Rock Garden at right angles.
+const ride = { name: 'r', waypoints: [{ lat: 39.995, lon: -105.0001 }, { lat: 40.012, lon: -105.0001 }],
+  legs: [{ kind: 'track', hints: [], coords: Array.from({ length: 171 }, (_, i) => [39.995 + i * 0.0001, -105.0001, 1700]) }], cues: [] };
+const rt = RouteStore.build(ride);
+const runs = Trails.match(rt);
+check('matches the trail the route rides', runs.length === 1 && runs[0].way.id === 1, runs.map(r => r.way.n + ' ' + Math.round(r.fromM) + '–' + Math.round(r.toM)).join(', '));
+check('…from where it joins to where it ends', runs[0] && Math.abs(runs[0].fromM - 556) < 25 && Math.abs(runs[0].toM - 1668) < 25);
+check('a trail crossed at right angles is not "ridden"', !runs.some(r => r.way.id === 2));
+check('hardest of the runs', Trails.hardest(runs).name === 'Blue square');
+const far = RouteStore.build({ ...ride, legs: [{ kind: 'track', hints: [], coords: ride.legs[0].coords.map(c => [c[0], c[1] + 0.0003, c[2]]) }] });
+check('25 m off to the side is not on the trail', Trails.match(far).length === 0);
+Trails.tiles.clear();
+
 section('Router with a stub network');
 (async () => {
   const calls = [];
-  let profileUploads = 0, failNextCustom = false;
+  let profileUploads = 0, failNextCustom = false, rejectUpload = false, lastUpload = '';
   sandbox.fetch = async (url, opts = {}) => {
     calls.push(url);
-    if (/mtb\.brf$/.test(url)) return { ok: true, status: 200, text: async () => tpl };
-    if (/brouter\/profile$/.test(url)) { profileUploads++; return { ok: true, status: 200, json: async () => ({ profileid: 'custom_' + profileUploads }) }; }
+    const m = /(\w+)\.brf$/.exec(url);
+    if (m) return { ok: true, status: 200, text: async () => brf(m[1]) };
+    if (/brouter\/profile$/.test(url)) {
+      profileUploads++;
+      if (rejectUpload) return { ok: true, status: 200, json: async () => ({ profileid: 'custom_x', error: 'Profile error: ParseException' }) };
+      lastUpload = opts.body;
+      return { ok: true, status: 200, json: async () => ({ profileid: 'custom_' + profileUploads }) };
+    }
     if (/brouter\?/.test(url)) {
       if (/custom_1/.test(url) && failNextCustom) return { ok: false, status: 500, text: async () => 'profile custom_1 not found' };
       const gj = { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { voicehints: [[1, 2, 0, 10, -90]], messages: msgs },
@@ -258,24 +317,51 @@ section('Router with a stub network');
     }
     return { ok: false, status: 404, text: async () => '' };
   };
-  Router.setTemplateUrl('assets/data/mtb.brf');
+  Router.setTemplateBase('assets/data/');
   const a = { lat: 51.5, lon: -0.1 }, b = { lat: 51.501, lon: -0.101 };
   const l1 = await Router.leg(a, b, 'gravel-rough');
   check('leg comes back as [lat, lon, ele]', l1.coords[0][0] === 51.5 && l1.coords[0][1] === -0.1 && l1.coords[0][2] === 10);
-  check('gravel-rough passes its profile override', /profile=gravel&.*profile:prefer_unpaved_paths=1/.test(calls[calls.length - 1]));
+  check('gravel-rough uploads its own profile and routes with it', profileUploads === 1 && /profile=custom_1&/.test(calls[calls.length - 1]) &&
+    /prefer_unpaved_paths true/.test(lastUpload) && /rl_never/.test(lastUpload));
   check('leg carries a surface summary', l1.surface && l1.surface.trail === 40);
   const n = calls.length;
   const l2 = await Router.leg(a, b, 'gravel-rough');
   check('the same leg again is cached', calls.length === n && l2 !== l1 && l2.coords[0] !== l1.coords[0]);
   await Router.leg(a, b, 'mtb-2');
-  check('an MTB level uploads its profile and routes with the id', profileUploads === 1 && /profile=custom_1/.test(calls[calls.length - 1]));
+  check('an MTB level uploads its profile and routes with the id', profileUploads === 2 && /profile=custom_2/.test(calls[calls.length - 1]));
   await Router.leg(b, a, 'mtb-2');
-  check('…once per level', profileUploads === 1);
+  check('…once per level', profileUploads === 2);
   failNextCustom = true;
-  await Router.leg({ lat: 51.6, lon: -0.2 }, b, 'mtb-2');
-  check('an expired profile is uploaded again', profileUploads === 2 && /profile=custom_2/.test(calls[calls.length - 1]));
+  calls.length = 0;
+  await Router.leg({ lat: 51.6, lon: -0.2 }, b, 'gravel-rough');
+  check('an expired profile is uploaded again', profileUploads === 3 && /profile=custom_3/.test(calls[calls.length - 1]), calls.slice(-2).join(' | '));
+  failNextCustom = false;
+  rejectUpload = true;
+  const fb = await Router.leg({ lat: 51.7, lon: -0.3 }, b, 'fastbike');
+  check('a profile the server rejects falls back to the stock one, flagged', fb.fallback === true && /profile=fastbike&/.test(calls[calls.length - 1]));
+  rejectUpload = false;
   const s = await Router.leg(a, b, 'straight');
   check('straight legs are densified', s.kind === 'straight' && s.coords.length >= 3);
+
+  section('Trail service busy: back off, then recover');
+  let tries = 0;
+  Trails.setBackoff(30);
+  Trails.clearCache();
+  Trails.setFetch(async () => {
+    tries++;
+    if (tries <= 3) return { ok: false, status: 502, json: async () => ({}) };     // all three mirrors busy once
+    return { ok: true, status: 200, json: async () => overpass };
+  });
+  let changes = 0;
+  Trails.setListener(() => changes++);
+  Trails.want([tk.x + '/' + tk.y]);
+  await new Promise(r => setTimeout(r, 15));
+  check('a busy server is reported, with a retry', Trails.status().failing && tries === 3, JSON.stringify(Trails.status()));
+  await new Promise(r => setTimeout(r, 200));
+  check('…and the tile arrives on the retry', Trails.tiles.has(tk.x + '/' + tk.y) && !Trails.status().failing && tries === 4, 'tries ' + tries);
+  check('listener told about each change', changes >= 3);
+  Trails.setListener(null);
+  Trails.clearCache();
 
   section('Settings stay compatible with CritLab and CrossLab');
   // A fresh page: Settings caches the blob on first read, so use a new context

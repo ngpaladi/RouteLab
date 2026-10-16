@@ -83,7 +83,13 @@ app: true
         <button class="btn btn-sm" id="zoom-out" aria-label="Zoom out">−</button>
         <button class="btn btn-sm" id="zoom-fit" title="Fit the route" aria-label="Fit the route">⤢</button>
         <button class="btn btn-sm" id="locate-btn" title="Where am I?" aria-label="Show my location">◎</button>
+        <button class="btn btn-sm" id="layers-btn" title="Map style and trail ratings" aria-label="Map layers">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 2 8l10 5 10-5-10-5z"/><path d="m2 13 10 5 10-5"/></svg>
+        </button>
       </div>
+      <div class="layer-panel" id="layer-panel" hidden></div>
+      <div class="trail-legend" id="trail-legend" hidden></div>
+      <div class="map-tip" id="map-tip" hidden></div>
       <div class="map-mode" id="map-mode" hidden></div>
       <div class="wp-bar" id="wp-bar" hidden></div>
     </div>

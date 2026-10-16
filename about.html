@@ -60,6 +60,40 @@ title: About
 </ul>
 
 <p>
+  At every level, RouteLab never routes on a sidewalk, a footway crossing
+  without bike access, or anything tagged as closed to bikes. That also means a
+  click beside a road attaches to the road, not the pavement next to it. The
+  gravel levels treat a main road with a bike lane like a quiet street, so they
+  take the lane rather than zig-zag through the side streets around it.
+</p>
+
+<h2>Trail ratings</h2>
+
+<p>
+  With the trail overlay on (the layers button on the map), rated trails are
+  drawn in the colour of their sign:
+</p>
+<ul>
+  <li><b>IMBA ratings</b> (<code>mtb:scale:imba</code>): white circle, green circle, blue square, black diamond, double black diamond.</li>
+  <li><b>S-scale only</b> (<code>mtb:scale</code>): S0 is drawn green, S1 blue,
+    S2 black, S3 double black and S4 and up orange ("pro"), and labelled as an S
+    grade, not as a sign.</li>
+</ul>
+<p>
+  Hover a trail for its name and grade. Trails closed to bikes are faded and
+  dashed. The rated trails your route rides are listed under the route,
+  with the hardest one; they're shown as a band along the elevation profile,
+  and <b>Add trail cues</b> puts one at the start of each (<code>BLK Wood Rat</code>).
+</p>
+<p>
+  The router itself can't use IMBA grades (BRouter doesn't read that tag); the
+  skill levels steer by the S-scale. Ratings come from OpenStreetMap's Overpass
+  service, which can take half a minute for a new area and is sometimes too busy
+  to answer. RouteLab keeps trying in the background and keeps what it gets for
+  a month.
+</p>
+
+<p>
   The grades are only as good as the map: plenty of trails have no
   <code>mtb:scale</code> at all and are treated as rideable. Under the stats you
   can see what the route actually uses: how much is paved, gravel or trail, and

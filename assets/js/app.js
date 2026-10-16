@@ -37,12 +37,14 @@
   // ── Boot ──────────────────────────────────────────────────────────────────
 
   async function boot() {
-    Router.setTemplateUrl(location.pathname.replace(/[^/]*$/, '') + 'assets/data/mtb.brf');
+    Router.setTemplateBase(location.pathname.replace(/[^/]*$/, '') + 'assets/data/');
     map = TileMap.create($('map-area'), {
       onDraw: drawOverlay, hitTest, onClick: mapClick,
       onDragStart: dragStart, onDrag: dragMove, onDragEnd: dragEnd,
-      onHover: mapHover, onView: v => saveView(v),
+      onHover: mapHover, onView: v => { saveView(v); requestTrails(); },
+      units: () => units(),
     });
+    Trails.setListener(() => { map.redraw(); renderTrailLegend(); matchTrails(); });
     map.setLayer(Settings.get('rlTiles'));
     const v = Local.view();
     if (v && isFinite(v.lat)) map.setView(v.lat, v.lon, v.z);
@@ -162,6 +164,12 @@
     $('zoom-out').addEventListener('click', () => map.zoomBy(-1));
     $('zoom-fit').addEventListener('click', fit);
     $('locate-btn').addEventListener('click', locate);
+    $('layers-btn').addEventListener('click', e => { e.stopPropagation(); $('layer-panel').hidden = !$('layer-panel').hidden; renderLayers(); });
+    document.addEventListener('click', e => { if (!e.target.closest('#layer-panel, #layers-btn')) $('layer-panel').hidden = true; });
+    $('layer-panel').addEventListener('change', e => {
+      if (e.target.name === 'tiles') { Settings.set({ rlTiles: e.target.value }); map.setLayer(e.target.value); }
+      if (e.target.id === 'layer-trails') { Settings.set({ rlTrails: e.target.checked }); matchTrails(); renderTrailLegend(); map.redraw(); requestTrails(); }
+    });
 
     const dz = $('dropzone'), fi = $('file-input');
     dz.addEventListener('click', () => fi.click());
@@ -226,6 +234,14 @@
     $('export-json').addEventListener('click', () => exportAs('json'));
 
     $('route-list').addEventListener('click', listClick);
+    $('route-stats').addEventListener('click', e => {
+      const row = e.target.closest('.trail-row');
+      if (!row) return;
+      state.hoverM = +row.dataset.at;
+      const p = RouteStore.positionAt(state.track, state.hoverM);
+      if (p) map.setView(p.lat, p.lon, Math.max(map.view().z, 15));
+      profile.setHover(state.hoverM);
+    });
 
     document.querySelectorAll('.mobile-tab').forEach(b => b.addEventListener('click', () => {
       document.querySelectorAll('.mobile-tab').forEach(x => x.classList.toggle('active', x === b));
@@ -246,10 +262,21 @@
       const d = e.detail || {};
       if (d.icu) renderIcuConnection();
       if (d.tiles) map.setLayer(Settings.get('rlTiles'));
+      if (d.trails) { matchTrails(); renderTrailLegend(); requestTrails(); }
       if (d.units) applyUnits();
       if (d.cleared) { state.saved = []; renderList(); }
       rebuild();
     });
+  }
+
+  function renderLayers() {
+    const cur = Settings.get('rlTiles');
+    $('layer-panel').innerHTML =
+      '<div class="lp-title">Map</div>' +
+      Object.entries(TileMap.LAYERS).map(([k, v]) =>
+        '<label class="lp-row"><input type="radio" name="tiles" value="' + k + '"' + (k === cur ? ' checked' : '') + '><span>' + esc(v.name) + '</span></label>').join('') +
+      '<div class="lp-title">Overlay</div>' +
+      '<label class="lp-row"><input type="checkbox" id="layer-trails"' + (trailsOn() ? ' checked' : '') + '><span>Trail ratings (IMBA and S-scale)</span></label>';
   }
 
   function fillSelects() {
@@ -317,7 +344,10 @@
       const profileNow = r.profile;
       Router.leg(a, b, profileNow).then(res => {
         const at = state.route.legs.indexOf(leg);
-        if (at >= 0) { state.route.legs[at] = res; replaceInSnapshots(leg, res); changed({ quiet: true }); }
+        if (at >= 0) {
+          state.route.legs[at] = res; replaceInSnapshots(leg, res); changed({ quiet: true });
+          if (res.fallback) say('route-status', 'warn', 'The router would not take RouteLab’s profile, so this leg used BRouter’s standard one — it may use a sidewalk. Change the terrain to try again.');
+        }
       }, err => {
         const at = state.route.legs.indexOf(leg);
         if (at >= 0) {
@@ -473,7 +503,17 @@
       mass: s.mass, cda: s.cda, crr: s.crr, ftp: s.ftp, ridePct: s.rlRidePct, maxDescent: s.rlMaxDescent,
     });
     state.cues = Cues.all(r, state.track, { turns: true, slight: !!s.rlSlightTurns });
+    matchTrails({ render: false });
     render();
+    requestTrails();
+  }
+
+  /** Which rated trails the route rides, from whatever ratings are loaded. */
+  function matchTrails({ render: again = true } = {}) {
+    const before = JSON.stringify((state.trailRuns || []).map(x => [x.way.id, Math.round(x.fromM)]));
+    state.trailRuns = trailsOn() && !state.drag ? Trails.match(state.track) : [];
+    const after = JSON.stringify(state.trailRuns.map(x => [x.way.id, Math.round(x.fromM)]));
+    if (again && before !== after) { renderStats(); profile.draw(profileState()); }
   }
 
   // ── Persistence ───────────────────────────────────────────────────────────
@@ -833,6 +873,7 @@
   }
 
   function mapHover(e) {
+    showTip(e && !state.drag ? e : null);
     if (!e || !state.track || state.track.n < 2) { if (state.hoverM != null) { state.hoverM = null; profile.setHover(null); map.redraw(); } return; }
     const hit = hitTest(e.x, e.y);
     map.canvas.style.cursor = state.pick ? 'crosshair' : hit ? (hit.kind === 'line' ? 'copy' : 'grab') : '';
@@ -933,9 +974,13 @@
 
   // ── Map overlay ───────────────────────────────────────────────────────────
 
+  const ROUTE = '#e0317e';          // magenta: distinct from CyclOSM's blue lanes and the trail colours
+  const POWER = '#f76707';
+
   function drawOverlay(ctx, m) {
     const t = state.track, r = state.route;
-    screen = { pts: [], idx: [], cues: [] };
+    screen = { pts: [], idx: [], cues: [], trails: [] };
+    drawTrails(ctx, m);
     if (!t) return;
     // Decimate to roughly a point per pixel for drawing and hit-testing.
     let last = null;
@@ -959,37 +1004,26 @@
       ctx.setLineDash([]);
     };
     if (P.length > 1) {
-      line(0, t.n, 'rgba(4, 18, 31, 0.75)', 7);
-      // Legs one by one, so a leg still routing is drawn dashed.
+      // A hairline of shadow, then white, then the colour: reads on any basemap.
+      line(0, t.n, 'rgba(0, 0, 0, 0.28)', 10);
+      line(0, t.n, '#ffffff', 8);
       r.legs.forEach((leg, k) => {
         const a = t.legStart[k], b = k + 1 < t.legStart.length ? t.legStart[k + 1] : t.n - 1;
-        line(a, b, leg.kind === 'pending' ? '#8b949e' : '#58a6ff', 4, leg.kind === 'pending' ? [6, 6] : null);
+        line(a, b, leg.kind === 'pending' ? 'rgba(224, 49, 126, 0.55)' : ROUTE, 4.5, leg.kind === 'pending' ? [7, 7] : null);
       });
-      // Power blocks on top, in the power colour.
       for (const c of r.cues) {
         if (c.type !== 'power') continue;
         const end = c.endM || t.length;
         let a = 0, b = t.n - 1;
         while (a < t.n - 1 && t.d[a] < c.atM) a++;
         while (b > 0 && t.d[b] > end) b--;
-        if (b > a) line(a, b, '#d95926', 4);
+        if (b > a) line(a, b, POWER, 4.5);
       }
-      // Direction chevrons every ~120 px of line.
-      ctx.fillStyle = '#e6edf3';
-      let acc = 0;
-      for (let k = 1; k < P.length; k++) {
-        const seg = Math.hypot(P[k].x - P[k - 1].x, P[k].y - P[k - 1].y);
-        acc += seg;
-        if (acc < 120 || seg < 0.5) continue;
-        acc = 0;
-        const ang = Math.atan2(P[k].y - P[k - 1].y, P[k].x - P[k - 1].x);
-        ctx.save(); ctx.translate(P[k].x, P[k].y); ctx.rotate(ang);
-        ctx.beginPath(); ctx.moveTo(3, 0); ctx.lineTo(-2.5, -3); ctx.lineTo(-2.5, 3); ctx.closePath(); ctx.fill();
-        ctx.restore();
-      }
+      chevrons(ctx, P);
+      kmMarkers(ctx, m, t);
     }
 
-    // Cues.
+    // Cues: white-ringed discs, so they read on the light basemap.
     const showTurns = !!Settings.get('rlShowTurns');
     for (const c of state.cues) {
       const ty = Cues.TYPES[c.type];
@@ -997,30 +1031,46 @@
       const p = RouteStore.positionAt(t, c.atM);
       if (!p) continue;
       const q = m.project(p.lat, p.lon);
-      screen.cues.push({ id: c.id, x: q.x, y: q.y });
-      const rad = ty.turn ? 6 : 8;
-      ctx.fillStyle = ty.color;
-      ctx.strokeStyle = '#0d1117'; ctx.lineWidth = 2;
+      screen.cues.push({ id: c.id, x: q.x, y: q.y, cue: c });
+      const rad = ty.turn ? 6.5 : 9;
+      ctx.fillStyle = ty.turn ? '#24292f' : ty.color;
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(q.x, q.y, rad, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#0d1117';
+      ctx.fillStyle = ty.turn ? '#ffffff' : '#0d1117';
       ctx.font = 'bold ' + (ty.turn ? 9 : 10) + 'px -apple-system, sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(ty.glyph, q.x, q.y + 0.5);
       ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
     }
 
-    // Waypoints.
+    // Where a point was put somewhere the route can't go (a field, a trail
+    // closed to bikes), a dashed line shows where it actually joins.
+    ctx.setLineDash([3, 4]); ctx.strokeStyle = 'rgba(36, 41, 47, 0.75)'; ctx.lineWidth = 1.5;
+    r.waypoints.forEach((w, i) => {
+      const leg = i > 0 ? r.legs[i - 1] : r.legs[0];
+      if (!leg || leg.kind === 'pending' || !leg.coords.length) return;
+      const c = i > 0 ? leg.coords[leg.coords.length - 1] : leg.coords[0];
+      const p = m.project(w.lat, w.lon), q = m.project(c[0], c[1]);
+      if (Math.hypot(p.x - q.x, p.y - q.y) < 12) return;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
+    });
+    ctx.setLineDash([]);
+
+    // Waypoints: a start disc, a chequered finish, small rings between.
     r.waypoints.forEach((w, i) => {
       const p = m.project(w.lat, w.lon);
       const first = i === 0, lastWp = i === r.waypoints.length - 1 && i > 0;
       const loop = lastWp && Geo.dist(w.lat, w.lon, r.waypoints[0].lat, r.waypoints[0].lon) < 15;
       if (loop) return;   // the start marker already says "here"
-      ctx.fillStyle = first ? '#3fb950' : lastWp ? '#f78166' : '#e6edf3';
-      ctx.strokeStyle = '#0d1117'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(p.x, p.y, first || lastWp ? 7 : 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      if (first) startMarker(ctx, p.x, p.y);
+      else if (lastWp) finishMarker(ctx, p.x, p.y);
+      else {
+        ctx.fillStyle = '#ffffff'; ctx.strokeStyle = ROUTE; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 5.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
       if (i === state.selectedWp) {
-        ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 2.5;
-        ctx.beginPath(); ctx.arc(p.x, p.y, 11, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = '#1c6fd6'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 13, 0, Math.PI * 2); ctx.stroke();
       }
     });
 
@@ -1028,9 +1078,180 @@
     if (state.hoverM != null && t.n > 1) {
       const p = RouteStore.positionAt(t, state.hoverM);
       const q = m.project(p.lat, p.lon);
-      ctx.fillStyle = '#fab219'; ctx.strokeStyle = '#0d1117'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(q.x, q.y, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#fab219'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(q.x, q.y, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     }
+  }
+
+  function chevrons(ctx, P) {
+    ctx.fillStyle = '#ffffff';
+    let acc = 0;
+    for (let k = 1; k < P.length; k++) {
+      const seg = Math.hypot(P[k].x - P[k - 1].x, P[k].y - P[k - 1].y);
+      acc += seg;
+      if (acc < 110 || seg < 0.5) continue;
+      acc = 0;
+      const ang = Math.atan2(P[k].y - P[k - 1].y, P[k].x - P[k - 1].x);
+      ctx.save(); ctx.translate(P[k].x, P[k].y); ctx.rotate(ang);
+      ctx.beginPath(); ctx.moveTo(3.5, 0); ctx.lineTo(-2.5, -3.2); ctx.lineTo(-1, 0); ctx.lineTo(-2.5, 3.2); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  /** Distance pills along the route, at a round step that keeps them ~90 px apart. */
+  function kmMarkers(ctx, m, t) {
+    const per = units() === 'mi' ? Units.MI : 1000;
+    const a = m.project(t.lat[0], t.lon[0]);
+    let px = 0, prev = a;
+    for (let k = 1; k < screen.pts.length; k++) { px += Math.hypot(screen.pts[k].x - prev.x, screen.pts[k].y - prev.y); prev = screen.pts[k]; }
+    const pxPerM = px / Math.max(1, t.length);
+    const step = [1, 2, 5, 10, 20, 25, 50, 100, 200].find(s => s * per * pxPerM >= 90);
+    if (!step) return;
+    ctx.font = 'bold 10px -apple-system, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (let v = step; v * per < t.length - step * per * 0.3; v += step) {
+      const p = RouteStore.positionAt(t, v * per);
+      const q = m.project(p.lat, p.lon);
+      if (q.x < -20 || q.y < -20 || q.x > m.width + 20 || q.y > m.height + 20) continue;
+      const label = String(v), w = Math.max(18, label.length * 6 + 8);
+      ctx.fillStyle = '#ffffff'; ctx.strokeStyle = ROUTE; ctx.lineWidth = 1.5;
+      roundRect(ctx, q.x - w / 2, q.y - 8, w, 16, 8); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#24292f';
+      ctx.fillText(label, q.x, q.y + 0.5);
+    }
+    ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function startMarker(ctx, x, y) {
+    ctx.fillStyle = '#2f9e44'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.moveTo(x - 2.5, y - 4.5); ctx.lineTo(x + 4.5, y); ctx.lineTo(x - 2.5, y + 4.5); ctx.closePath(); ctx.fill();
+  }
+
+  function finishMarker(ctx, x, y) {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.clip();
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(x - 9, y - 9, 18, 18);
+    ctx.fillStyle = '#111111';
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) if ((i + j) % 2 === 0) ctx.fillRect(x - 9 + i * 4.5, y - 9 + j * 4.5, 4.5, 4.5);
+    ctx.restore();
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(x, y, 10.5, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // ── Trail ratings ──────────────────────────────────────────────────────────
+
+  const TRAIL_MIN_Z = 11;
+
+  function trailsOn() { return Settings.get('rlTrails') !== false; }
+
+  function drawTrails(ctx, m) {
+    if (!trailsOn() || m.view().z < TRAIL_MIN_Z) return;
+    const b = m.bounds();
+    const ways = Trails.waysIn(b.s, b.w, b.n, b.e);
+    const z = m.view().z;
+    const w = z >= 15 ? 4 : z >= 13 ? 3 : 2.2;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    // Hardest last, so a black diamond crossing a green circle shows on top.
+    const rated = ways.map(way => ({ way, r: Trails.rate(way) })).filter(x => x.r)
+      .sort((a, c) => Trails.ORDER.indexOf(a.r.key) - Trails.ORDER.indexOf(c.r.key));
+    for (const { way, r } of rated) {
+      const pts = [];
+      for (let k = 0; k + 1 < way.g.length; k += 2) pts.push(m.project(way.g[k], way.g[k + 1]));
+      if (!pts.some(p => p.x > -50 && p.y > -50 && p.x < m.width + 50 && p.y < m.height + 50)) continue;
+      screen.trails.push({ way, r, pts });
+      const path = () => { ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); };
+      ctx.globalAlpha = way.b ? 0.45 : 1;
+      path(); ctx.strokeStyle = r.key === 'white' ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.9)'; ctx.lineWidth = w + 2.5; ctx.stroke();
+      path(); ctx.strokeStyle = r.rating.color; ctx.lineWidth = w;
+      ctx.setLineDash(way.b ? [5, 4] : []); ctx.stroke();
+      if (r.key === 'double') {
+        path(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = Math.max(1, w / 3); ctx.setLineDash([3, 3]); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  let trailTimer = null;
+  /** Ask for the ratings in view (and along the route), a moment after the map stops. */
+  function requestTrails() {
+    clearTimeout(trailTimer);
+    trailTimer = setTimeout(() => {
+      renderTrailLegend();
+      if (!trailsOn() || !map) return;
+      const keys = [];
+      if (map.view().z >= TRAIL_MIN_Z) {
+        const b = map.bounds();
+        keys.push(...Trails.tilesIn(b.s, b.w, b.n, b.e, 12));
+      }
+      Trails.want(keys);
+      const t = state.track;
+      if (t && t.n > 1 && t.length < 300000) {
+        let s = 90, n = -90, w = 180, e = -180;
+        for (let i = 0; i < t.n; i += 5) { s = Math.min(s, t.lat[i]); n = Math.max(n, t.lat[i]); w = Math.min(w, t.lon[i]); e = Math.max(e, t.lon[i]); }
+        Trails.want(Trails.tilesIn(s, w, n, e, 16), { keep: true });
+      }
+    }, 350);
+  }
+
+  function renderTrailLegend() {
+    const el = $('trail-legend');
+    if (!el) return;
+    if (!trailsOn()) { el.hidden = true; return; }
+    el.hidden = false;
+    const st = Trails.status();
+    const zoomedOut = map && map.view().z < TRAIL_MIN_Z;
+    const keys = ['green', 'blue', 'black', 'double', 'pro'];
+    el.innerHTML =
+      '<div class="tl-title">Trail ratings</div>' +
+      (zoomedOut ? '<div class="tl-note">Zoom in to see them</div>' :
+        '<div class="tl-keys">' + keys.map(k => '<span class="tl-key"><i class="tl-sw tl-' + k + '"></i>' + esc(Trails.RATINGS[k].name.replace(' diamond', '').replace(' circle', '').replace(' square', '').replace('Double black', '◆◆')) + '</span>').join('') + '</div>') +
+      (st.loading ? '<div class="tl-note status-loading">Loading from OpenStreetMap…</div>'
+        : st.failing ? '<div class="tl-note tl-warn">OpenStreetMap’s trail service is busy; trying again' + (st.retryIn > 1 ? ' in ' + st.retryIn + ' s' : '') + '.</div>' : '');
+  }
+
+  /** The tooltip over the map for a trail or a cue under the pointer. */
+  function showTip(e) {
+    const tip = $('map-tip');
+    if (!e) { tip.hidden = true; return; }
+    let html = null;
+    for (const c of screen ? screen.cues : []) {
+      if (Math.hypot(c.x - e.x, c.y - e.y) <= 10) {
+        const ty = Cues.TYPES[c.cue.type];
+        html = '<b>' + esc(c.cue.label || ty.name) + '</b><span>' + esc(ty.name) + ' · ' + fmt(c.cue.atM) +
+          (state.times ? ' · ' + Units.duration(Cues.timeAt(state.track, state.times, c.cue.atM)) : '') + '</span>' +
+          (c.cue.note ? '<span>' + esc(c.cue.note) + '</span>' : '');
+        break;
+      }
+    }
+    if (!html && screen) {
+      let best = 7, hit = null;
+      for (const tr of screen.trails) for (let k = 1; k < tr.pts.length; k++) {
+        const d = segDist(e.x, e.y, tr.pts[k - 1], tr.pts[k]);
+        if (d < best) { best = d; hit = tr; }
+      }
+      if (hit) html = '<b>' + esc(hit.way.n || 'Unnamed trail') + '</b><span><i class="tl-sw tl-' + hit.r.key + '"></i>' + esc(hit.r.label) + '</span>' +
+        (hit.way.b ? '<span class="tip-warn">Closed to bikes</span>' : '');
+    }
+    if (!html) { tip.hidden = true; return; }
+    tip.innerHTML = html;
+    tip.hidden = false;
+    const W = map.width;
+    tip.style.left = Math.min(W - 230, e.x + 14) + 'px';
+    tip.style.top = (e.y + 14) + 'px';
   }
 
   // ── Cue forms ─────────────────────────────────────────────────────────────
@@ -1224,8 +1445,12 @@
     renderCues();
     renderTools();
     previews();
-    profile.draw({ track: state.track, cues: state.cues, times: state.times, units: units(), showTurns: !!Settings.get('rlShowTurns') });
+    profile.draw(profileState());
     map.redraw();
+  }
+
+  function profileState() {
+    return { track: state.track, cues: state.cues, times: state.times, units: units(), showTurns: !!Settings.get('rlShowTurns'), trails: state.trailRuns || [] };
   }
 
   function renderStats() {
@@ -1244,7 +1469,40 @@
       stat(t.hasEle ? up.toLocaleString() : '–', U === 'mi' ? 'ft' : 'm', 'climbing') +
       stat(Units.duration(total), '', 'at ' + s.rlRidePct + '% FTP') +
       stat(t.hasEle ? (t.maxGrade * 100).toFixed(0) : '–', '%', 'steepest 200 m', 'From satellite elevation data, smoothed. Switchbacks on a steep hillside can read steeper than they ride.') +
-      surfaceBar(t.surface);
+      surfaceBar(t.surface) + trailList();
+    const b = $('trail-cues-btn');
+    if (b) b.addEventListener('click', addTrailCues);
+  }
+
+  /** The rated trails on the route, in order, and a button to cue them. */
+  function trailList() {
+    const runs = state.trailRuns || [];
+    if (!runs.length) return '';
+    const hard = Trails.hardest(runs);
+    const rows = runs.slice(0, 8).map(x =>
+      '<div class="trail-row" data-at="' + x.fromM + '"><i class="tl-sw tl-' + x.r.key + '"></i>' +
+      '<span class="trail-name">' + esc(x.way.n || 'Unnamed trail') + '</span>' +
+      '<span class="trail-at">' + round1(fromM(x.fromM)).toFixed(1) + '–' + round1(fromM(x.toM)).toFixed(1) + '</span></div>').join('');
+    return '<div class="route-trails">' +
+      '<div class="trail-head"><span>Rated trails</span>' + (hard ? '<span>hardest: <i class="tl-sw tl-' + hard.key + '"></i>' + esc(hard.name) + '</span>' : '') + '</div>' +
+      rows + (runs.length > 8 ? '<div class="hint">+ ' + (runs.length - 8) + ' more</div>' : '') +
+      '<button class="btn btn-sm" id="trail-cues-btn" title="A cue where each rated trail starts, with its rating">Add trail cues</button></div>';
+  }
+
+  /** A note cue at the start of each rated trail: "BLK Wood Rat". Replaces earlier trail cues. */
+  function addTrailCues() {
+    const runs = state.trailRuns || [];
+    if (!runs.length) return;
+    snapshot();
+    state.route.cues = state.route.cues.filter(c => c.type !== 'trail');
+    for (const x of runs) {
+      state.route.cues.push(Cues.make('trail', x.fromM, {
+        label: x.r.rating.short + ' ' + (x.way.n || 'trail'),
+        note: x.r.label + ' · ' + fmt(x.toM - x.fromM),
+      }));
+    }
+    changed();
+    say('cue-status', 'ok', runs.length + ' trail cue' + (runs.length > 1 ? 's' : '') + ' added, each with its rating.');
   }
 
   /** Paved / gravel / trail split from the router's way tags, and the hardest graded trail. */
