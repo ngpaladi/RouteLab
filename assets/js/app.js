@@ -45,6 +45,7 @@
       units: () => units(),
     });
     Trails.setListener(() => { map.redraw(); renderTrailLegend(); matchTrails(); });
+    Trails.dirt.setListener(() => { map.redraw(); renderTrailLegend(); });
     map.setLayer(Settings.get('rlTiles'));
     const v = Local.view();
     if (v && isFinite(v.lat)) map.setView(v.lat, v.lon, v.z);
@@ -169,6 +170,7 @@
     $('layer-panel').addEventListener('change', e => {
       if (e.target.name === 'tiles') { Settings.set({ rlTiles: e.target.value }); map.setLayer(e.target.value); }
       if (e.target.id === 'layer-trails') { Settings.set({ rlTrails: e.target.checked }); matchTrails(); renderTrailLegend(); map.redraw(); requestTrails(); }
+      if (e.target.id === 'layer-dirt') { Settings.set({ rlDirt: e.target.checked }); renderTrailLegend(); map.redraw(); requestTrails(); }
     });
 
     const dz = $('dropzone'), fi = $('file-input');
@@ -262,7 +264,7 @@
       const d = e.detail || {};
       if (d.icu) renderIcuConnection();
       if (d.tiles) map.setLayer(Settings.get('rlTiles'));
-      if (d.trails) { matchTrails(); renderTrailLegend(); requestTrails(); }
+      if (d.trails) { matchTrails(); renderTrailLegend(); requestTrails(); map.redraw(); }
       if (d.units) applyUnits();
       if (d.cleared) { state.saved = []; renderList(); }
       rebuild();
@@ -276,7 +278,8 @@
       Object.entries(TileMap.LAYERS).map(([k, v]) =>
         '<label class="lp-row"><input type="radio" name="tiles" value="' + k + '"' + (k === cur ? ' checked' : '') + '><span>' + esc(v.name) + '</span></label>').join('') +
       '<div class="lp-title">Overlay</div>' +
-      '<label class="lp-row"><input type="checkbox" id="layer-trails"' + (trailsOn() ? ' checked' : '') + '><span>Trail ratings (IMBA and S-scale)</span></label>';
+      '<label class="lp-row"><input type="checkbox" id="layer-trails"' + (trailsOn() ? ' checked' : '') + '><span>Trail ratings (IMBA and S-scale)</span></label>' +
+      '<label class="lp-row" title="Shown when the route is set to a gravel or mountain-bike level"><input type="checkbox" id="layer-dirt"' + (Settings.get('rlDirt') !== false ? ' checked' : '') + '><span>Dirt roads (gravel &amp; MTB)</span></label>';
   }
 
   function fillSelects() {
@@ -422,6 +425,7 @@
     snapshot();
     r.profile = p;
     Settings.set({ rlProfile: p });
+    requestTrails();
     // Re-route what the router drew; an imported track keeps its exact line.
     let n = 0;
     r.legs = r.legs.map((leg, k) => {
@@ -447,7 +451,7 @@
     const flip = { 2: 5, 3: 6, 4: 7, 5: 2, 6: 3, 7: 4, 8: 9, 9: 8, 10: 11, 11: 10, 17: 18, 18: 17 };
     return {
       kind: leg.kind,
-      ...(leg.surface ? { surface: leg.surface } : {}),
+      ...(leg.surface ? { surface: { ...leg.surface, ...(leg.surface.runs ? { runs: leg.surface.runs.slice().reverse() } : {}) } } : {}),
       coords: leg.coords.slice().reverse().map(c => c.slice()),
       hints: (leg.hints || []).map(h => [n - 1 - h[0], flip[h[1]] || h[1], 0, h[3], -h[4]]).reverse(),
     };
@@ -976,10 +980,13 @@
 
   const ROUTE = '#e0317e';          // magenta: distinct from CyclOSM's blue lanes and the trail colours
   const POWER = '#f76707';
+  const DIRT = '#8a4b14';           // brown: dirt roads on the map, and stripes on the route where it is unpaved
+  const DIRT_TRAIL = '#4a2a0c';
 
   function drawOverlay(ctx, m) {
     const t = state.track, r = state.route;
     screen = { pts: [], idx: [], cues: [], trails: [] };
+    drawDirt(ctx, m);
     drawTrails(ctx, m);
     if (!t) return;
     // Decimate to roughly a point per pixel for drawing and hit-testing.
@@ -1011,6 +1018,13 @@
         const a = t.legStart[k], b = k + 1 < t.legStart.length ? t.legStart[k + 1] : t.n - 1;
         line(a, b, leg.kind === 'pending' ? 'rgba(224, 49, 126, 0.55)' : ROUTE, 4.5, leg.kind === 'pending' ? [7, 7] : null);
       });
+      // Unpaved stretches, striped brown over the route colour (gravel and MTB levels).
+      if (dirtMode() && t.dirt) {
+        for (const sp of t.dirt) {
+          const [a, b] = indexSpan(t, sp.fromM, sp.toM);
+          if (b > a) line(a, b, sp.kind === 'trail' ? DIRT_TRAIL : DIRT, 4.5, [7, 6]);
+        }
+      }
       for (const c of r.cues) {
         if (c.type !== 'power') continue;
         const end = c.endM || t.length;
@@ -1154,6 +1168,41 @@
   // ── Trail ratings ──────────────────────────────────────────────────────────
 
   const TRAIL_MIN_Z = 11;
+  const DIRT_MIN_Z = 12;
+
+  /** Track indices covering [fromM, toM]. */
+  function indexSpan(t, fromM, toM) {
+    let a = 0, b = t.n - 1;
+    while (a < t.n - 1 && t.d[a + 1] <= fromM) a++;
+    while (b > 0 && t.d[b - 1] >= toM) b--;
+    return [a, b];
+  }
+
+  /** Dirt is highlighted only when the route is set to a gravel or MTB level. */
+  function dirtMode() {
+    const g = Router.terrain(state.route.profile).group;
+    return g === 'Gravel' || g === 'Mountain bike';
+  }
+  function dirtOn() { return dirtMode() && Settings.get('rlDirt') !== false; }
+
+  function drawDirt(ctx, m) {
+    if (!dirtOn() || m.view().z < DIRT_MIN_Z) return;
+    const b = m.bounds();
+    const z = m.view().z;
+    const w = z >= 15 ? 3.5 : z >= 13 ? 2.6 : 2;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
+    for (const way of Trails.dirt.waysIn(b.s, b.w, b.n, b.e)) {
+      const pts = [];
+      for (let k = 0; k + 1 < way.g.length; k += 2) pts.push(m.project(way.g[k], way.g[k + 1]));
+      if (!pts.some(p => p.x > -50 && p.y > -50 && p.x < m.width + 50 && p.y < m.height + 50)) continue;
+      const path = () => { ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); };
+      path(); ctx.strokeStyle = 'rgba(255, 244, 214, 0.85)'; ctx.lineWidth = w + 2; ctx.stroke();
+      // A road with a dirt surface solid; a track dashed, as on a topo map.
+      path(); ctx.strokeStyle = DIRT; ctx.lineWidth = w; ctx.setLineDash(way.k === 'track' ? [6, 3] : []); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.lineCap = 'round';
+  }
 
   function trailsOn() { return Settings.get('rlTrails') !== false; }
 
@@ -1191,13 +1240,11 @@
     clearTimeout(trailTimer);
     trailTimer = setTimeout(() => {
       renderTrailLegend();
-      if (!trailsOn() || !map) return;
-      const keys = [];
-      if (map.view().z >= TRAIL_MIN_Z) {
-        const b = map.bounds();
-        keys.push(...Trails.tilesIn(b.s, b.w, b.n, b.e, 12));
-      }
-      Trails.want(keys);
+      if (!map) return;
+      const b = map.bounds(), z = map.view().z;
+      if (dirtOn()) Trails.dirt.want(z >= DIRT_MIN_Z ? Trails.tilesIn(b.s, b.w, b.n, b.e, 12) : []);
+      if (!trailsOn()) return;
+      Trails.want(z >= TRAIL_MIN_Z ? Trails.tilesIn(b.s, b.w, b.n, b.e, 12) : []);
       const t = state.track;
       if (t && t.n > 1 && t.length < 300000) {
         let s = 90, n = -90, w = 180, e = -180;
@@ -1210,18 +1257,33 @@
   function renderTrailLegend() {
     const el = $('trail-legend');
     if (!el) return;
-    if (!trailsOn()) { el.hidden = true; return; }
+    const trails = trailsOn(), dirt = dirtOn();
+    const routeDirt = dirtMode() && state.track && state.track.dirt && state.track.dirt.length > 0;
+    if (!trails && !dirt && !routeDirt) { el.hidden = true; return; }
     el.hidden = false;
-    const st = Trails.status();
-    const zoomedOut = map && map.view().z < TRAIL_MIN_Z;
+    const st = Trails.status(), ds = Trails.dirt.status();
+    const z = map ? map.view().z : 99;
     const keys = ['green', 'blue', 'black', 'double', 'pro'];
-    el.innerHTML =
-      '<div class="tl-title">Trail ratings</div>' +
-      (zoomedOut ? '<div class="tl-note">Zoom in to see them</div>' :
-        '<div class="tl-keys">' + keys.map(k => '<span class="tl-key"><i class="tl-sw tl-' + k + '"></i>' + esc(Trails.RATINGS[k].name.replace(' diamond', '').replace(' circle', '').replace(' square', '').replace('Double black', '◆◆')) + '</span>').join('') + '</div>') +
-      (st.loading ? '<div class="tl-note status-loading">Loading from OpenStreetMap…</div>'
-        : st.failing ? '<div class="tl-note tl-warn">OpenStreetMap’s trail service is busy; trying again' + (st.retryIn > 1 ? ' in ' + st.retryIn + ' s' : '') + '.</div>' : '');
+    let html = '';
+    if (trails) {
+      html += '<div class="tl-title">Trail ratings</div>' +
+        (z < TRAIL_MIN_Z ? '<div class="tl-note">Zoom in to see them</div>' :
+          '<div class="tl-keys">' + keys.map(k => '<span class="tl-key"><i class="tl-sw tl-' + k + '"></i>' + esc(Trails.RATINGS[k].name.replace(' diamond', '').replace(' circle', '').replace(' square', '').replace('Double black', '◆◆')) + '</span>').join('') + '</div>');
+    }
+    if (dirt || routeDirt) {
+      html += '<div class="tl-title' + (trails ? ' tl-gap' : '') + '">Dirt</div><div class="tl-keys">' +
+        (dirt ? '<span class="tl-key"><i class="tl-sw tl-dirt-road"></i>Road</span><span class="tl-key"><i class="tl-sw tl-dirt-track"></i>Track</span>' : '') +
+        (routeDirt ? '<span class="tl-key"><i class="tl-sw tl-dirt-route"></i>On your route</span>' : '') + '</div>' +
+        (dirt && z < DIRT_MIN_Z ? '<div class="tl-note">Zoom in to see dirt roads</div>' : '');
+    }
+    const loading = (trails && st.loading) || (dirt && ds.loading);
+    const failing = (trails && st.failing) || (dirt && ds.failing);
+    const retryIn = Math.max(trails && st.failing ? st.retryIn : 0, dirt && ds.failing ? ds.retryIn : 0);
+    html += loading ? '<div class="tl-note status-loading">Loading from OpenStreetMap…</div>'
+      : failing ? '<div class="tl-note tl-warn">OpenStreetMap’s map-data service is busy; trying again' + (retryIn > 1 ? ' in ' + retryIn + ' s' : '') + '.</div>' : '';
+    el.innerHTML = html;
   }
+
 
   /** The tooltip over the map for a trail or a cue under the pointer. */
   function showTip(e) {

@@ -92,6 +92,7 @@
             <select id="set-tiles"></select>
           </div>
           <label class="check" style="margin-top:10px"><input type="checkbox" id="set-trails"><span>Trail ratings over the map (IMBA and S-scale)</span></label>
+          <label class="check"><input type="checkbox" id="set-dirt"><span>Dirt roads over the map (gravel and MTB levels)</span></label>
           <p class="hint" style="margin-top:6px">
             Trail ratings come from OpenStreetMap through Overpass, which can take half a minute
             for a new area; they are kept in this browser for a month.
@@ -186,6 +187,7 @@
       $('set-tiles').value = s.rlTiles;
       $('set-slight').checked = !!s.rlSlightTurns;
       $('set-trails').checked = s.rlTrails !== false;
+      $('set-dirt').checked = s.rlDirt !== false;
       statusEl.style.display = 'none';
       modal.style.display = '';
     }
@@ -234,6 +236,7 @@
     $('set-tiles').addEventListener('change', function () { Settings.set({ rlTiles: this.value }); fire({ tiles: true }); });
     $('set-slight').addEventListener('change', function () { Settings.set({ rlSlightTurns: this.checked }); fire({ turns: true }); });
     $('set-trails').addEventListener('change', function () { Settings.set({ rlTrails: this.checked }); fire({ trails: true }); });
+    $('set-dirt').addEventListener('change', function () { Settings.set({ rlDirt: this.checked }); fire({ trails: true }); });
 
     $('data-clear').addEventListener('click', async function () {
       if (!confirm('Delete every route saved in this browser by RouteLab? This cannot be undone.')) return;

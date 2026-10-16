@@ -1026,6 +1026,10 @@ tr.flash { background: rgba(88,166,255,.18) !important; }
 .tl-black { background: #141414; box-shadow: 0 0 0 1px #888; }
 .tl-double { background: repeating-linear-gradient(90deg, #141414 0 3px, #fff 3px 4px); box-shadow: 0 0 0 1px #888; }
 .tl-pro { background: #e8590c; }
+.tl-gap { margin-top: 5px; }
+.tl-dirt-road { background: #8a4b14; }
+.tl-dirt-track { background: repeating-linear-gradient(90deg, #8a4b14 0 4px, transparent 4px 6px); }
+.tl-dirt-route { background: repeating-linear-gradient(90deg, #8a4b14 0 4px, #e0317e 4px 8px); }
 
 .map-tip {
   position: absolute; z-index: 5; pointer-events: none; max-width: 230px;

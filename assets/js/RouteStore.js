@@ -40,6 +40,7 @@ const Settings = (() => {
     rlUnits: 'km',                 // 'km' | 'mi'
     rlTiles: 'cyclosm',            // basemap, a key of TileMap.LAYERS — the cycle map by default
     rlTrails: true,                // draw trail difficulty ratings over the map
+    rlDirt: true,                  // draw dirt roads over the map (gravel and MTB levels only)
     rlTurnCues: true,              // put the router's turns into the export
     rlSlightTurns: false,          // …including "bear left/right" and keep-left/right
     rlRidePct: 70,                 // % of FTP the time estimate assumes outside power cues
@@ -48,7 +49,7 @@ const Settings = (() => {
     rlWelcomeSeen: false, rlTourDone: false,
   };
 
-  const RESETTABLE = ['rlProfile', 'rlUnits', 'rlTiles', 'rlTrails', 'rlTurnCues', 'rlSlightTurns', 'rlShowTurns', 'rlRidePct', 'rlMaxDescent'];
+  const RESETTABLE = ['rlProfile', 'rlUnits', 'rlTiles', 'rlTrails', 'rlDirt', 'rlTurnCues', 'rlSlightTurns', 'rlShowTurns', 'rlRidePct', 'rlMaxDescent'];
 
   let cache = null;
   let memKey = '';
@@ -292,9 +293,39 @@ const RouteStore = (() => {
     smooth(ele, d, 50);
     // Only worth showing when the router told us about at least some of it.
     if (surface && surface.paved + surface.gravel + surface.trail === 0) surface = null;
-    const t = { n, lat, lon, ele, d, legStart, hints, surface, length: n ? d[n - 1] : 0, hasEle: n > 1 && eleCount / n > 0.5 };
+    const t = { n, lat, lon, ele, d, legStart, hints, surface, dirt: dirtSpans(route, legStart, d, n), length: n ? d[n - 1] : 0, hasEle: n > 1 && eleCount / n > 0.5 };
     Object.assign(t, climbStats(t));
     return t;
+  }
+
+  /**
+   * Where along the track it is unpaved: [{ fromM, toM, kind: 'gravel'|'trail' }],
+   * from each leg's surface runs, stretched to the leg's length here (BRouter's
+   * metres and ours differ by a hair).
+   */
+  function dirtSpans(route, legStart, d, n) {
+    const out = [];
+    for (let k = 0; k < route.legs.length; k++) {
+      const runs = route.legs[k].surface && route.legs[k].surface.runs;
+      if (!Array.isArray(runs) || !runs.length) continue;
+      const a = legStart[k], b = k + 1 < legStart.length ? legStart[k + 1] : n - 1;
+      if (!(b > a)) continue;
+      const total = runs.reduce((sum, r) => sum + r[1], 0);
+      if (!(total > 0)) continue;
+      const scale = (d[b] - d[a]) / total;
+      let at = d[a];
+      for (const [kind, m] of runs) {
+        const to = at + m * scale;
+        const name = kind === 'g' ? 'gravel' : kind === 't' ? 'trail' : null;
+        if (name) {
+          const prev = out[out.length - 1];
+          if (prev && prev.kind === name && at - prev.toM < 1) prev.toM = to;
+          else out.push({ fromM: at, toM: to, kind: name });
+        }
+        at = to;
+      }
+    }
+    return out;
   }
 
   const SCALES = ['0-', '0', '0+', '1-', '1', '1+', '2-', '2', '2+', '3', '4', '5', '6'];

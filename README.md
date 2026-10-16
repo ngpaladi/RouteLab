@@ -32,6 +32,11 @@ your FTP and weight, and the intervals.icu key.
   access, and anything tagged `bicycle=no`, so a click beside a road attaches to
   the road. The gravel levels treat a main road with a bike lane like a quiet
   street, rather than zig-zagging round it.
+- **Fewer turns**: the gravel and quiet-road levels charge more for a corner, so
+  a side-street detour has to be worth its turns.
+- **Dirt highlighted** on the gravel and MTB levels: unpaved stretches of the
+  route are striped brown, and dirt roads and tracks are drawn on the map
+  (solid for a road with a dirt surface, dashed for a track).
 - **Trail ratings on the map**: IMBA signs (white/green circle, blue square,
   black and double black diamond) from `mtb:scale:imba`, and the S-scale shown
   in the nearest sign's colour where that's all there is. Hover a trail for its
@@ -108,7 +113,7 @@ assets/js/
   Cues.js        — turn cues, series, power targets, climbs, the timing model
   Gpx.js         — GPX/TCX import, GPX/TCX/CSV export, Units
   TileMap.js     — canvas slippy map: tiles (faded in), pan, zoom, pinch, scale bar, overlay hook
-  Trails.js      — IMBA / S-scale trail ratings from Overpass: tiles, cache, backoff, route matching
+  Trails.js      — IMBA / S-scale trail ratings and dirt roads from Overpass: tiles, cache, backoff, route matching
   Profile.js     — the elevation profile
   Tour.js        — welcome dialog and walkthrough (shared, byte-identical)
   app.js         — UI state, editing, undo, rendering
@@ -138,8 +143,13 @@ Every level routes with its own copy of a stock BRouter profile, rewritten in
 
 - **all levels**: a rule at the end of the way context makes sidewalks,
   footway crossings without bike access and `bicycle=no` ways impassable;
-- **gravel**: main roads with a bike lane lose their base surcharge, the 1.8×
-  "no speed limit tagged" penalty and the cost of joining one;
+- **gravel**: main roads with a bike lane cost slightly less than a residential
+  street; without one, secondary and tertiary roads cost about 1.2–1.4× a
+  residential street, not the stock 1.6–1.9×. The 1.8× "no speed limit tagged"
+  penalty goes, joining a main road costs 100 instead of 400, and a turn costs
+  150 instead of 65;
+- **quiet roads**: a turn costs 150 instead of 90 (paved roads keep 90: more
+  sent a test leg round the block);
 - **MTB**: the `mtb:scale` pricing rewritten per level, a `sac_scale` penalty,
   foot-only ways forbidden, roughness weighted down as skill goes up.
 
@@ -154,6 +164,12 @@ Overpass servers are often at capacity; failed areas are retried with
 exponential backoff and the legend says so. A route "rides" a trail where its
 points are within 12 m of it and running the same way within 35°.
 
+Dirt roads for the map are a second Overpass layer, with the same tiles, queue
+and backoff, fetched only on the gravel and MTB levels from zoom 12 (tracks not
+`tracktype=grade1`, and roads and bike paths with an unpaved `surface`;
+driveways left out). The route's own dirt comes from the router instead: each
+leg keeps BRouter's per-way surface runs, so it needs no Overpass at all.
+
 ## Storage, shared with CritLab and CrossLab
 
 | key | where | what | shared |
@@ -162,6 +178,7 @@ points are within 12 m of it and running the same way within 35°.
 | `cl-icu-key` | local/sessionStorage | the intervals.icu key, in its own slot | yes |
 | `rl-view`, `rl-current` | localStorage | map position and open route | no |
 | `rl-trails-*` | localStorage | cached trail ratings, 30 days | no |
+| `rl-dirt-*` | localStorage | cached dirt roads, 30 days, 24 areas at most | no |
 | `routelab` / `routes` | IndexedDB | saved routes with their cues | no — own database |
 
 RouteLab's reset clears only `rl*` keys.

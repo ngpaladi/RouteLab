@@ -53,7 +53,7 @@ const Router = (() => {
     // hint: one line under the picker saying what this level will and won't ride.
     fastbike:       { name: 'Paved roads',              group: 'Road',          template: 'fastbike', crr: 0,
       hint: 'Fastest paved roads; stays off dirt.' },
-    trekking:       { name: 'Quiet roads & bike paths', group: 'Road',          template: 'trekking', crr: 0.002,
+    trekking:       { name: 'Quiet roads & bike paths', group: 'Road',          template: 'trekking', crr: 0.002, turn: 150,
       hint: 'Bike paths and quiet roads, including smooth unpaved paths.' },
     gravel:         { name: 'Smooth gravel',            group: 'Gravel',        template: 'gravel',   crr: 0.005, lanes: true,
       hint: 'Gravel roads and good tracks where they fit; pavement (bike lanes welcome) where they don’t.' },
@@ -134,18 +134,25 @@ const Router = (() => {
     return text.slice(0, at) + rule + text.slice(at);
   }
 
-  /** Gravel: a main road with a bike lane is priced like a residential street. */
+  /**
+   * Gravel, on pavement: stay on the through road instead of zig-zagging.
+   * Stock gravel prices a secondary road at nearly twice a residential street,
+   * adds 1.8× on primary/secondary roads with no maxspeed tag, charges 400 to
+   * join one, and only 65 for a turn. So one untagged gap in a bike lane (Beacon
+   * St at Cleveland Circle has 119 m) sent the route through side streets and
+   * a footpath. With a lane, a main road costs slightly less than a
+   * residential street (2.2), because it is usually the direct line; without
+   * one, secondary and tertiary roads are dearer but not double; a turn costs
+   * 150, so a detour has to save something to be worth the corners.
+   */
   function bikeLanes(text) {
-    // Three places price a main road: its base cost, a 1.8× "no maxspeed tag"
-    // penalty on primary/secondary, and a 400 charge for joining one. With a
-    // lane, all three go: slightly under a residential street (2.2), because
-    // the main road is usually the direct line.
     const rows = [
       [/(switch +highway=primary\|primary_link +)4\.8/, '$1switch any_cycleway 2.0 4.8'],
-      [/(switch +highway=secondary\|secondary_link +)4\.2/, '$1switch any_cycleway 1.9 4.2'],
-      [/(switch +highway=tertiary\|tertiary_link +)3\.6/, '$1switch any_cycleway 1.9 3.6'],
-      [/switch highway=primary\|secondary 1\.8 1\.0/, 'switch and highway=primary|secondary not any_cycleway 1.8 1.0'],
-      [/switch is_main_road 400/, 'switch and is_main_road not any_cycleway 400'],
+      [/(switch +highway=secondary\|secondary_link +)4\.2/, '$1switch any_cycleway 1.9 3.0'],
+      [/(switch +highway=tertiary\|tertiary_link +)3\.6/, '$1switch any_cycleway 1.9 2.6'],
+      [/switch highway=primary\|secondary 1\.8 1\.0/, '1.0'],
+      [/switch is_main_road 400/, 'switch and is_main_road not any_cycleway 100'],
+      [/assign turncost switch junction=roundabout 15 65/, 'assign turncost switch junction=roundabout 15 ' + GRAVEL_TURN],
     ];
     for (const [re, to] of rows) {
       if (!re.test(text)) throw new Error('The bundled gravel profile has changed shape; main-road costs not found.');
@@ -153,6 +160,7 @@ const Router = (() => {
     }
     return text;
   }
+  const GRAVEL_TURN = 150;
 
   /** Bake `profile:` overrides into the text rather than trusting URL overrides on a custom profile. */
   function withParams(text, params) {
@@ -164,11 +172,23 @@ const Router = (() => {
     return text;
   }
 
+  /**
+   * A dearer corner (stock trekking: 90 per 90° turn), so a quiet-street
+   * detour has to be worth its turns. Not on fastbike: tried there, 150 sent
+   * one test leg 1.1 km round a block to save corners.
+   */
+  function withTurnCost(text, cost) {
+    const re = /(assign turncost = if is_ldcr then 0\s+else if junction=roundabout then 0\s+else )90/;
+    if (!re.test(text)) throw new Error('The bundled trekking profile has changed shape; turncost not found.');
+    return text.replace(re, '$1' + cost);
+  }
+
   /** The full profile text a terrain level routes with. */
   function profileText(template, key) {
     const T = terrain(key);
     let out = T.mtb ? mtbProfile(template, T.mtb) : template;
     if (T.lanes) out = bikeLanes(out);
+    if (T.turn) out = withTurnCost(out, T.turn);
     out = withParams(out, T.params);
     return noSidewalks(out);
   }
@@ -315,14 +335,15 @@ const Router = (() => {
   /**
    * Metres of each kind of surface on a leg, and the hardest mtb:scale on it,
    * from BRouter's per-way `messages` table (header row first; WayTags is a
-   * space-separated "k=v" list).
+   * space-separated "k=v" list). `runs` is the same in order along the leg,
+   * [kind letter p|g|t|u, metres], so the map can colour the dirt.
    */
   function surfaceOf(messages) {
     if (!Array.isArray(messages) || messages.length < 2) return null;
     const head = messages[0];
     const iD = head.indexOf('Distance'), iT = head.indexOf('WayTags');
     if (iD < 0 || iT < 0) return null;
-    const out = { paved: 0, gravel: 0, trail: 0, unknown: 0, maxScale: null };
+    const out = { paved: 0, gravel: 0, trail: 0, unknown: 0, maxScale: null, runs: [] };
     for (let r = 1; r < messages.length; r++) {
       const d = +messages[r][iD] || 0;
       const tags = {};
@@ -330,7 +351,11 @@ const Router = (() => {
         const eq = kv.indexOf('=');
         if (eq > 0) tags[kv.slice(0, eq)] = kv.slice(eq + 1);
       }
-      out[classify(tags)] += d;
+      const kind = classify(tags);
+      out[kind] += d;
+      const last = out.runs[out.runs.length - 1];
+      if (last && last[0] === kind[0]) last[1] = Math.round((last[1] + d) * 10) / 10;
+      else if (d > 0) out.runs.push([kind[0], Math.round(d * 10) / 10]);
       const sc = tags['mtb:scale'];
       if (sc != null && SCALE_ORDER.indexOf(sc) > SCALE_ORDER.indexOf(out.maxScale)) out.maxScale = sc;
     }

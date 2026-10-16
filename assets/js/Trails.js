@@ -28,9 +28,7 @@ const Trails = (() => {
     'https://overpass.private.coffee/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
   ];
-  const PREFIX = 'rl-trails-';
   const MAX_AGE = 30 * 86400e3;
-  const MAX_TILES = 60;
 
   const RATINGS = {
     white:  { name: 'White circle',         short: 'WHT', color: '#f4f4f4', imba: 0 },
@@ -75,128 +73,6 @@ const Trails = (() => {
     return out;
   }
 
-  const tiles = new Map();     // 'x/y' → { ways } once loaded
-  const failed = new Map();    // 'x/y' → { at, tries } since the last success
-  let viewKeys = [], routeKeys = [];
-  let retryTimer = null;
-  let backoffBase = 5000;
-  // The public Overpass servers turn requests away when busy ("at capacity…
-  // retry using exponential backoff"), so a failed area is retried after 5 s,
-  // 10 s, 20 s … up to 5 min, for as long as it is still wanted.
-  const backoff = tries => Math.min(300e3, backoffBase * Math.pow(2, Math.max(0, tries - 1)));
-  function setBackoff(ms) { backoffBase = ms; }
-  let queue = [];              // 'x/y' waiting, most wanted first
-  let busy = null;             // 'x/y' in flight
-  let onChange = () => {};
-  let fetchFn = (...a) => fetch(...a);
-
-  function setListener(fn) { onChange = fn || (() => {}); }
-  function setFetch(fn) { fetchFn = fn; }
-
-  function readCache(key) {
-    try {
-      const v = JSON.parse(localStorage.getItem(PREFIX + key) || 'null');
-      if (v && Date.now() - v.t < MAX_AGE && Array.isArray(v.w)) return v.w;
-    } catch (_) {}
-    return null;
-  }
-  function writeCache(key, ways) {
-    const blob = JSON.stringify({ t: Date.now(), w: ways });
-    for (let tries = 0; tries < 4; tries++) {
-      try {
-        localStorage.setItem(PREFIX + key, blob);
-        let idx = [];
-        try { idx = JSON.parse(localStorage.getItem(PREFIX + 'index') || '[]'); } catch (_) {}
-        idx = idx.filter(k => k !== key).concat(key);
-        while (idx.length > MAX_TILES) { try { localStorage.removeItem(PREFIX + idx.shift()); } catch (_) {} }
-        localStorage.setItem(PREFIX + 'index', JSON.stringify(idx));
-        return;
-      } catch (_) {
-        // Full: drop the oldest few and try again.
-        let idx = [];
-        try { idx = JSON.parse(localStorage.getItem(PREFIX + 'index') || '[]'); } catch (_) {}
-        if (!idx.length) return;
-        for (const k of idx.splice(0, 5)) { try { localStorage.removeItem(PREFIX + k); } catch (_) {} }
-        try { localStorage.setItem(PREFIX + 'index', JSON.stringify(idx)); } catch (_) {}
-      }
-    }
-  }
-  function clearCache() {
-    try {
-      const idx = JSON.parse(localStorage.getItem(PREFIX + 'index') || '[]');
-      for (const k of idx) localStorage.removeItem(PREFIX + k);
-      localStorage.removeItem(PREFIX + 'index');
-    } catch (_) {}
-    tiles.clear();
-    failed.clear();
-  }
-
-  /**
-   * Ask for tiles, most wanted first. Anything already loaded or cached is
-   * served at once; the rest are queued, replacing what was queued before
-   * (the map has moved on) unless `keep` is set.
-   */
-  function want(keys, { keep = false } = {}) {
-    if (keep) routeKeys = keys.slice(); else viewKeys = keys.slice();
-    let changed = false;
-    const missing = [];
-    for (const k of keys) {
-      if (tiles.has(k) || k === busy) continue;
-      const c = readCache(k);
-      if (c) { tiles.set(k, { ways: c }); changed = true; continue; }
-      const f = failed.get(k);
-      if (f && Date.now() - f.at < backoff(f.tries)) continue;
-      missing.push(k);
-    }
-    queue = keep ? queue.concat(missing.filter(k => !queue.includes(k))) : missing.concat(queue.filter(k => !missing.includes(k)).slice(0, 12));
-    if (changed) onChange();
-    pump();
-  }
-
-  async function pump() {
-    if (busy || !queue.length) return;
-    busy = queue.shift();
-    onChange();
-    const key = busy;
-    try {
-      const ways = await load(key);
-      tiles.set(key, { ways });
-      writeCache(key, ways);
-      failed.delete(key);
-    } catch (_) {
-      const f = failed.get(key) || { tries: 0 };
-      failed.set(key, { at: Date.now(), tries: f.tries + 1 });
-      clearTimeout(retryTimer);
-      retryTimer = setTimeout(() => { want(routeKeys, { keep: true }); want(viewKeys); }, backoff(f.tries + 1) + 50);
-    } finally {
-      busy = null;
-      onChange();
-      pump();
-    }
-  }
-
-  async function load(key) {
-    const [x, y] = key.split('/').map(Number);
-    const b = boundsOf(x, y);
-    const bb = [b.s, b.w, b.n, b.e].map(v => v.toFixed(5)).join(',');
-    const q = '[out:json][timeout:60];(way["mtb:scale"](' + bb + ');way["mtb:scale:imba"](' + bb + '););out tags geom;';
-    let last = null;
-    for (const url of MIRRORS) {
-      try {
-        const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        const timer = ctl ? setTimeout(() => ctl.abort(), 65000) : null;
-        const res = await fetchFn(url, {
-          method: 'POST', body: 'data=' + encodeURIComponent(q),
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl ? ctl.signal : undefined,
-        });
-        if (timer) clearTimeout(timer);
-        if (!res.ok) { last = new Error('HTTP ' + res.status); continue; }
-        return parse(await res.json());
-      } catch (err) { last = err; }
-    }
-    throw last || new Error('Overpass unavailable');
-  }
-
   /** Overpass JSON → compact ways: { id, n, i, s, b, g: [lat, lon, lat, lon…] }. */
   function parse(body) {
     const out = [];
@@ -214,28 +90,205 @@ const Trails = (() => {
     return out;
   }
 
-  /** Every loaded way touching a box, each once. */
-  function waysIn(s, w, n, e) {
-    const seen = new Set(), out = [];
-    for (const k of tilesIn(s, w, n, e, 100)) {
-      const t = tiles.get(k);
-      if (!t) continue;
-      for (const way of t.ways) if (!seen.has(way.id)) { seen.add(way.id); out.push(way); }
+  // Shared by both layers: the fetch (stubbed in tests) and the retry base.
+  let backoffBase = 5000;
+  // The public Overpass servers turn requests away when busy ("at capacity…
+  // retry using exponential backoff"), so a failed area is retried after 5 s,
+  // 10 s, 20 s … up to 5 min, for as long as it is still wanted.
+  const backoff = tries => Math.min(300e3, backoffBase * Math.pow(2, Math.max(0, tries - 1)));
+  function setBackoff(ms) { backoffBase = ms; }
+  let fetchFn = (...a) => fetch(...a);
+  function setFetch(fn) { fetchFn = fn; }
+
+  /**
+   * One Overpass-backed layer of z11 tiles: a sequential queue, a
+   * localStorage cache under `prefix`, and backoff. `query(bbox)` is the
+   * Overpass QL body; `parse(json)` makes the compact ways that are cached.
+   */
+  function layer({ prefix, query, parse, maxTiles }) {
+    const PREFIX = prefix, MAX_TILES = maxTiles;
+    const tiles = new Map();     // 'x/y' → { ways } once loaded
+    const failed = new Map();    // 'x/y' → { at, tries } since the last success
+    let viewKeys = [], routeKeys = [];
+    let retryTimer = null;
+    let queue = [];              // 'x/y' waiting, most wanted first
+    let busy = null;             // 'x/y' in flight
+    let onChange = () => {};
+
+    function setListener(fn) { onChange = fn || (() => {}); }
+
+    function readCache(key) {
+      try {
+        const v = JSON.parse(localStorage.getItem(PREFIX + key) || 'null');
+        if (v && Date.now() - v.t < MAX_AGE && Array.isArray(v.w)) return v.w;
+      } catch (_) {}
+      return null;
+    }
+    function writeCache(key, ways) {
+      const blob = JSON.stringify({ t: Date.now(), w: ways });
+      for (let tries = 0; tries < 4; tries++) {
+        try {
+          localStorage.setItem(PREFIX + key, blob);
+          let idx = [];
+          try { idx = JSON.parse(localStorage.getItem(PREFIX + 'index') || '[]'); } catch (_) {}
+          idx = idx.filter(k => k !== key).concat(key);
+          while (idx.length > MAX_TILES) { try { localStorage.removeItem(PREFIX + idx.shift()); } catch (_) {} }
+          localStorage.setItem(PREFIX + 'index', JSON.stringify(idx));
+          return;
+        } catch (_) {
+          // Full: drop the oldest few and try again.
+          let idx = [];
+          try { idx = JSON.parse(localStorage.getItem(PREFIX + 'index') || '[]'); } catch (_) {}
+          if (!idx.length) return;
+          for (const k of idx.splice(0, 5)) { try { localStorage.removeItem(PREFIX + k); } catch (_) {} }
+          try { localStorage.setItem(PREFIX + 'index', JSON.stringify(idx)); } catch (_) {}
+        }
+      }
+    }
+    function clearCache() {
+      try {
+        const idx = JSON.parse(localStorage.getItem(PREFIX + 'index') || '[]');
+        for (const k of idx) localStorage.removeItem(PREFIX + k);
+        localStorage.removeItem(PREFIX + 'index');
+      } catch (_) {}
+      tiles.clear();
+      failed.clear();
+    }
+
+    /**
+     * Ask for tiles, most wanted first. Anything already loaded or cached is
+     * served at once; the rest are queued, replacing what was queued before
+     * (the map has moved on) unless `keep` is set.
+     */
+    function want(keys, { keep = false } = {}) {
+      if (keep) routeKeys = keys.slice(); else viewKeys = keys.slice();
+      let changed = false;
+      const missing = [];
+      for (const k of keys) {
+        if (tiles.has(k) || k === busy) continue;
+        const c = readCache(k);
+        if (c) { tiles.set(k, { ways: c }); changed = true; continue; }
+        const f = failed.get(k);
+        if (f && Date.now() - f.at < backoff(f.tries)) continue;
+        missing.push(k);
+      }
+      queue = keep ? queue.concat(missing.filter(k => !queue.includes(k))) : missing.concat(queue.filter(k => !missing.includes(k)).slice(0, 12));
+      if (changed) onChange();
+      pump();
+    }
+
+    async function pump() {
+      if (busy || !queue.length) return;
+      busy = queue.shift();
+      onChange();
+      const key = busy;
+      try {
+        const ways = await load(key);
+        tiles.set(key, { ways });
+        writeCache(key, ways);
+        failed.delete(key);
+      } catch (_) {
+        const f = failed.get(key) || { tries: 0 };
+        failed.set(key, { at: Date.now(), tries: f.tries + 1 });
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(() => { want(routeKeys, { keep: true }); want(viewKeys); }, backoff(f.tries + 1) + 50);
+      } finally {
+        busy = null;
+        onChange();
+        pump();
+      }
+    }
+
+    async function load(key) {
+      const [x, y] = key.split('/').map(Number);
+      const b = boundsOf(x, y);
+      const bb = [b.s, b.w, b.n, b.e].map(v => v.toFixed(5)).join(',');
+      const q = query(bb);
+      let last = null;
+      for (const url of MIRRORS) {
+        try {
+          const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          const timer = ctl ? setTimeout(() => ctl.abort(), 65000) : null;
+          const res = await fetchFn(url, {
+            method: 'POST', body: 'data=' + encodeURIComponent(q),
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl ? ctl.signal : undefined,
+          });
+          if (timer) clearTimeout(timer);
+          if (!res.ok) { last = new Error('HTTP ' + res.status); continue; }
+          return parse(await res.json());
+        } catch (err) { last = err; }
+      }
+      throw last || new Error('Overpass unavailable');
+    }
+
+    /** Every loaded way touching a box, each once. */
+    function waysIn(s, w, n, e) {
+      const seen = new Set(), out = [];
+      for (const k of tilesIn(s, w, n, e, 100)) {
+        const t = tiles.get(k);
+        if (!t) continue;
+        for (const way of t.ways) if (!seen.has(way.id)) { seen.add(way.id); out.push(way); }
+      }
+      return out;
+    }
+
+    function status() {
+      // Failing = something wanted right now has failed and not yet come back.
+      let failing = false, retryIn = 0;
+      for (const k of viewKeys.concat(routeKeys)) {
+        const f = failed.get(k);
+        if (!f || tiles.has(k)) continue;
+        failing = true;
+        retryIn = Math.max(retryIn, Math.ceil((f.at + backoff(f.tries) - Date.now()) / 1000));
+      }
+      return { loading: !!busy, queued: queue.length + (busy ? 1 : 0), loaded: tiles.size, failing, retryIn: Math.max(0, retryIn) };
+    }
+
+    return { want, waysIn, status, setListener, clearCache, tiles };
+  }
+
+  const trailTiles = layer({
+    prefix: 'rl-trails-', maxTiles: 60, parse,
+    query: bb => '[out:json][timeout:60];(way["mtb:scale"](' + bb + ');way["mtb:scale:imba"](' + bb + '););out tags geom;',
+  });
+
+  // ── Dirt roads ─────────────────────────────────────────────────────────────
+
+  // Unpaved surfaces, as in Router's classify(). Driveways (service) are left
+  // out: thousands of them in a rural tile, and nobody plans a ride up one.
+  const DIRT = 'unpaved|gravel|fine_gravel|compacted|dirt|earth|ground|grass|sand|mud|pebblestone|rock|woodchips';
+  const DIRT_ROADS = 'unclassified|residential|tertiary|secondary|road|living_street|cycleway|bridleway';
+  const PAVED_TRACK = 'asphalt|concrete|paved|paving_stones|chipseal';
+
+  /**
+   * Overpass JSON → compact dirt ways: { id, n, k, g }, where k is
+   * 'road' (a road or bike path with an unpaved surface) or 'track'
+   * (highway=track, not tracktype=grade1, not surfaced). Trails proper (paths
+   * with an mtb:scale) are the ratings layer's business.
+   */
+  function parseDirt(body) {
+    const out = [];
+    for (const el of (body && body.elements) || []) {
+      if (el.type !== 'way' || !Array.isArray(el.geometry) || el.geometry.length < 2) continue;
+      const t = el.tags || {};
+      let k = null;
+      if (t.highway === 'track' && t.tracktype !== 'grade1' && !new RegExp('^(' + PAVED_TRACK + ')$').test(t.surface || '')) k = 'track';
+      else if (new RegExp('^(' + DIRT_ROADS + ')$').test(t.highway || '') && new RegExp('^(' + DIRT + ')$').test(t.surface || '')) k = 'road';
+      if (!k) continue;
+      const g = [];
+      for (const p of el.geometry) g.push(Math.round(p.lat * 1e5) / 1e5, Math.round(p.lon * 1e5) / 1e5);
+      out.push({ id: el.id, n: t.name || t.ref || '', k, g });
     }
     return out;
   }
 
-  function status() {
-    // Failing = something wanted right now has failed and not yet come back.
-    let failing = false, retryIn = 0;
-    for (const k of viewKeys.concat(routeKeys)) {
-      const f = failed.get(k);
-      if (!f || tiles.has(k)) continue;
-      failing = true;
-      retryIn = Math.max(retryIn, Math.ceil((f.at + backoff(f.tries) - Date.now()) / 1000));
-    }
-    return { loading: !!busy, queued: queue.length + (busy ? 1 : 0), loaded: tiles.size, failing, retryIn: Math.max(0, retryIn) };
-  }
+  const dirt = layer({
+    prefix: 'rl-dirt-', maxTiles: 24, parse: parseDirt,
+    query: bb => '[out:json][timeout:90];(' +
+      'way["highway"="track"]["tracktype"!="grade1"]["surface"!~"^(' + PAVED_TRACK + ')$"](' + bb + ');' +
+      'way["highway"~"^(' + DIRT_ROADS + ')$"]["surface"~"^(' + DIRT + ')$"](' + bb + ');' +
+      ');out tags geom;',
+  });
 
   // ── Matching a route to rated trails ───────────────────────────────────────
 
@@ -252,7 +305,7 @@ const Trails = (() => {
       s = Math.min(s, track.lat[i]); n = Math.max(n, track.lat[i]);
       w = Math.min(w, track.lon[i]); e = Math.max(e, track.lon[i]);
     }
-    const ways = waysIn(s, w, n, e);
+    const ways = trailTiles.waysIn(s, w, n, e);
     if (!ways.length) return [];
     // Grid of segments, ~50 m cells, in a local flat projection.
     const lat0 = (s + n) / 2 * Math.PI / 180, R = 6371008.8, kx = Math.cos(lat0) * R * Math.PI / 180, ky = R * Math.PI / 180;
@@ -335,8 +388,10 @@ const Trails = (() => {
   }
 
   return {
-    rate, want, waysIn, status, match, hardest, parse, tileOf, boundsOf, tilesIn,
-    setListener, setFetch, setBackoff, clearCache, tiles, RATINGS, ORDER, Z,
+    rate, match, hardest, parse, parseDirt, tileOf, boundsOf, tilesIn, setFetch, setBackoff,
+    want: trailTiles.want, waysIn: trailTiles.waysIn, status: trailTiles.status,
+    setListener: trailTiles.setListener, clearCache: trailTiles.clearCache, tiles: trailTiles.tiles,
+    dirt, RATINGS, ORDER, Z,
   };
 })();
 

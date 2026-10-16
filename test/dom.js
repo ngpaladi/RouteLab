@@ -66,7 +66,12 @@ const sample = fs.readFileSync(path.join(ROOT, 'assets/data/sample-route.json'),
 const brf = name => fs.readFileSync(path.join(ROOT, 'assets/data', name + '.brf'), 'utf8');
 /** Overpass: one blue-square trail running north from wherever the test draws. */
 let overpassWays = [];
-function fakeOverpass() {
+function fakeOverpass(body) {
+  // The dirt-road query: the same lines, as tracks.
+  if (/tracktype/.test(decodeURIComponent(body || ''))) {
+    return { elements: overpassWays.map((g, k) => ({ type: 'way', id: 700 + k, tags: { highway: 'track', tracktype: 'grade3', name: 'Test Track ' + k },
+      geometry: g.map(([lat, lon]) => ({ lat, lon: lon + 0.001 })) })) };
+  }
   return { elements: overpassWays.map((g, k) => ({ type: 'way', id: 900 + k, tags: { highway: 'path', name: 'Test Trail ' + k, 'mtb:scale:imba': '2' },
     geometry: g.map(([lat, lon]) => ({ lat, lon })) })) };
 }
@@ -95,7 +100,10 @@ async function fakeFetch(url, opts = {}) {
   const m = /assets\/data\/(\w+)\.brf$/.exec(url);
   if (m) return resp(200, brf(m[1]));
   if (/brouter\/profile$/.test(url)) { net.uploads++; net.lastProfile = opts.body; return resp(200, '', { profileid: 'custom_test' + net.uploads }); }
-  if (/overpass/.test(url)) { net.overpass = (net.overpass || 0) + 1; return resp(200, '', fakeOverpass()); }
+  if (/overpass/.test(url)) {
+    if (/tracktype/.test(decodeURIComponent(opts.body || ''))) net.dirt = (net.dirt || 0) + 1; else net.overpass = (net.overpass || 0) + 1;
+    return resp(200, '', fakeOverpass(opts.body));
+  }
   if (/brouter\?/.test(url)) return resp(200, JSON.stringify(fakeRoute(url)));
   if (/open-meteo\.com\/v1\/elevation/.test(url)) {
     const n = new URL(url).searchParams.get('latitude').split(',').length;
@@ -281,7 +289,7 @@ async function bootPage(file) {
   check('terrain hint describes the level', /S3/.test($('terrain-hint').textContent));
   setValue('route-profile', 'gravel-rough');
   await settle();
-  check('rough gravel uploads a profile preferring dirt and taking bike lanes', /prefer_unpaved_paths true/.test(net.lastProfile) && /any_cycleway 1\.9 4\.2/.test(net.lastProfile));
+  check('rough gravel uploads a profile preferring dirt and taking bike lanes', /prefer_unpaved_paths true/.test(net.lastProfile) && /any_cycleway 1\.9 3\.0/.test(net.lastProfile) && /roundabout 15 150/.test(net.lastProfile));
   check('terrain is remembered for next time', G('Settings').get('rlProfile') === 'gravel-rough');
   setValue('route-profile', 'straight');
   await settle();
@@ -423,6 +431,14 @@ async function bootPage(file) {
   check('legend shown', !$('trail-legend').hidden && /Trail ratings/.test($('trail-legend').textContent) && /Blue/.test($('trail-legend').textContent));
   check('the route rides a rated trail', (App().state.trailRuns || []).length >= 1 && /Test Trail 0/.test($('route-stats').textContent), (App().state.trailRuns || []).length + ' runs');
   check('hardest rating named', /hardest: .*Blue square/.test($('route-stats').textContent));
+  G('Trails').dirt.clearCache();
+  map.setView(rt.lat[0], rt.lon[0], 14.2);
+  await sleep(500);
+  for (let k = 0; k < 20 && G('Trails').dirt.status().loading; k++) await sleep(50);
+  await sleep(100);
+  check('gravel level: dirt roads fetched for the view', net.dirt >= 1 && G('Trails').dirt.waysIn(rt.lat[0] - 0.05, rt.lon[0] - 0.05, rt.lat[0] + 0.05, rt.lon[0] + 0.05).some(w => w.k === 'track'), 'requests ' + net.dirt);
+  check('…the route knows where it is unpaved', (App().state.track.dirt || []).some(sp => sp.kind === 'gravel' && sp.toM - sp.fromM > 300), JSON.stringify(App().state.track.dirt));
+  check('…and the legend says so', /Dirt/.test($('trail-legend').textContent) && /Track/.test($('trail-legend').textContent) && /On your route/.test($('trail-legend').textContent));
   const p0 = map.project(overpassWays[0][10][0], overpassWays[0][10][1]);
   const c = App().map.canvas;
   c.dispatchEvent(pointer('pointermove', p0.x + 30, p0.y + 30));
@@ -436,7 +452,10 @@ async function bootPage(file) {
   check('…and again replaces rather than duplicates', R().cues.filter(x => x.type === 'trail').length === tc.length);
   $('layers-btn').click();
   $('layer-trails').checked = false; $('layer-trails').dispatchEvent(new window.Event('change', { bubbles: true }));
-  check('turning the overlay off hides the legend and the trail list', $('trail-legend').hidden && !/Rated trails/.test($('route-stats').textContent));
+  check('turning the overlay off drops ratings from the legend and the trail list', !/Trail ratings/.test($('trail-legend').textContent) && !/Rated trails/.test($('route-stats').textContent));
+  $('layer-dirt').checked = false; $('layer-dirt').dispatchEvent(new window.Event('change', { bubbles: true }));
+  check('…and with dirt off too, only the route’s own dirt is in the legend', !/Road/.test($('trail-legend').textContent) && /On your route/.test($('trail-legend').textContent) && G('Settings').get('rlDirt') === false);
+  $('layer-dirt').checked = true; $('layer-dirt').dispatchEvent(new window.Event('change', { bubbles: true }));
   $('layer-trails').checked = true; $('layer-trails').dispatchEvent(new window.Event('change', { bubbles: true }));
   document.body.click();
 

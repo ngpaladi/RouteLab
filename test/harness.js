@@ -235,9 +235,12 @@ for (const [k, T] of Object.entries(Router.TERRAIN)) {
   check(k + ': sidewalk ban in the way context', at > 0 && at < node && /assign costfactor switch rl_never 10000 costfactor/.test(txt) && /footway=sidewalk/.test(txt.slice(at, node)));
 }
 const g = Router.profileText(brf('gravel'), 'gravel');
-check('gravel prices laned main roads like a back street', /highway=secondary\|secondary_link +switch any_cycleway 1\.9 4\.2/.test(g) && /highway=primary\|primary_link +switch any_cycleway 2\.0 4\.8/.test(g));
-check('…without the no-maxspeed or joining penalties', /switch and highway=primary\|secondary not any_cycleway 1\.8 1\.0/.test(g) && /switch and is_main_road not any_cycleway 400/.test(g));
+check('gravel prices laned main roads like a back street', /highway=secondary\|secondary_link +switch any_cycleway 1\.9 3\.0/.test(g) && /highway=primary\|primary_link +switch any_cycleway 2\.0 4\.8/.test(g));
+check('…unlaned ones dearer but not double, and no no-maxspeed penalty', /highway=tertiary\|tertiary_link +switch any_cycleway 1\.9 2\.6/.test(g) && !/switch highway=primary\|secondary 1\.8/.test(g));
+check('…a small charge to join a main road without a lane', /switch and is_main_road not any_cycleway 100/.test(g) && !/is_main_road 400/.test(g));
+check('…and corners cost enough to stop zig-zags', /assign turncost switch junction=roundabout 15 150/.test(g));
 check('rough gravel bakes in prefer_unpaved_paths', /assign prefer_unpaved_paths true/.test(Router.profileText(brf('gravel'), 'gravel-rough')) && /assign prefer_unpaved_paths false/.test(g));
+check('quiet roads: a turn costs 150, paved roads keep the stock 90', /else 150\n/.test(Router.profileText(brf('trekking'), 'trekking')) && /else 90\n/.test(Router.profileText(brf('fastbike'), 'fastbike')));
 check('road profiles are not given the gravel lane rewrite', !/any_cycleway 1\.9/.test(Router.profileText(brf('fastbike'), 'fastbike')));
 let shape = false; try { Router.noSidewalks('assign x 1'); } catch (_) { shape = true; }
 check('a template without a node context is refused', shape);
@@ -257,6 +260,13 @@ check('hardest mtb:scale is kept', sf.maxScale === '2');
 const withSurface = { ...route, legs: route.legs.map((l, k) => k === 0 ? { ...l, surface: sf } : l) };
 const ts = RouteStore.build(withSurface).surface;
 check('a leg without a summary counts as unknown in the route total', ts && ts.paved === 120 && ts.unknown > 60000);
+check('surface runs in order along the leg', JSON.stringify(sf.runs) === JSON.stringify([['p', 100], ['g', 50], ['t', 30], ['p', 20], ['t', 10], ['u', 5]]), JSON.stringify(sf.runs));
+// A 1 km straight leg whose router metres (215) are stretched to its length.
+const dirtLeg = { kind: 'route', hints: [], surface: sf, coords: Array.from({ length: 101 }, (_, i) => [45 + i * 0.00009, 7, null]) };
+const dirtTrack = RouteStore.build({ name: 'd', waypoints: [{ lat: 45, lon: 7 }, { lat: 45.009, lon: 7 }], legs: [dirtLeg], cues: [] });
+const L = dirtTrack.length, sp = dirtTrack.dirt;
+check('dirt spans: gravel then trail, scaled to the leg', sp.length === 3 && sp[0].kind === 'gravel' && Math.abs(sp[0].fromM - L * 100 / 215) < 1 && Math.abs(sp[0].toM - L * 150 / 215) < 1 && sp[1].kind === 'trail' && sp[2].kind === 'trail', JSON.stringify(sp));
+check('a leg without runs (older save) has no spans', RouteStore.build(route).dirt.length === 0);
 
 section('Trail ratings');
 // A straight north-south trail, a crossing east-west one, and junk to ignore.
@@ -294,6 +304,15 @@ check('hardest of the runs', Trails.hardest(runs).name === 'Blue square');
 const far = RouteStore.build({ ...ride, legs: [{ kind: 'track', hints: [], coords: ride.legs[0].coords.map(c => [c[0], c[1] + 0.0003, c[2]]) }] });
 check('25 m off to the side is not on the trail', Trails.match(far).length === 0);
 Trails.tiles.clear();
+
+const dirtWays = Trails.parseDirt({ elements: [
+  { type: 'way', id: 1, tags: { highway: 'track', tracktype: 'grade3' }, geometry: [{ lat: 40, lon: -105 }, { lat: 40.01, lon: -105 }] },
+  { type: 'way', id: 2, tags: { highway: 'track', tracktype: 'grade1' }, geometry: [{ lat: 40, lon: -105 }, { lat: 40.01, lon: -105 }] },
+  { type: 'way', id: 3, tags: { highway: 'unclassified', surface: 'gravel', name: 'Old Mill Rd' }, geometry: [{ lat: 40, lon: -105 }, { lat: 40.01, lon: -105 }] },
+  { type: 'way', id: 4, tags: { highway: 'residential', surface: 'asphalt' }, geometry: [{ lat: 40, lon: -105 }, { lat: 40.01, lon: -105 }] },
+  { type: 'way', id: 5, tags: { highway: 'track', surface: 'asphalt' }, geometry: [{ lat: 40, lon: -105 }, { lat: 40.01, lon: -105 }] },
+] });
+check('dirt: tracks and unpaved roads, not grade1 or surfaced ones', dirtWays.map(w => w.id + w.k).join() === '1track,3road' && dirtWays[1].n === 'Old Mill Rd', dirtWays.map(w => w.id + w.k).join());
 
 section('Router with a stub network');
 (async () => {
