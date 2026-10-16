@@ -66,6 +66,11 @@ your FTP and weight, and the intervals.icu key.
   - **TCX**: a Garmin course with CoursePoints, the reliable format for a Garmin.
   - **Cue sheet**: a CSV.
   - **JSON**: the whole route, to load back into RouteLab.
+- **Share a link**: the route travels inside the URL fragment (`#r=…`, never
+  sent to a server): name, terrain, waypoints, your cues, and the exact line of
+  any imported track, deflated. Routed legs are routed again when the link is
+  opened, so the line matches unless OpenStreetMap has changed there. The
+  opener gets their own saved copy.
 
 ## Running locally
 

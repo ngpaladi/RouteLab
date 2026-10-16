@@ -524,9 +524,130 @@ const RouteStore = (() => {
     return r;
   }
 
+  // ── Links ───────────────────────────────────────────────────────────────
+  //
+  // A route in a URL fragment (#r=…), so it never reaches a server: the name,
+  // terrain, waypoints, your own cues, and the exact line of any imported
+  // track. Routed legs are not in it; the link's opener routes them again
+  // with the same terrain, which gives the same line unless OpenStreetMap
+  // has changed there since. Compact JSON, deflated where the browser can
+  // ("z"), else plain ("j"), then base64url.
+
+  /** Google's polyline encoding, generalised to `dims` columns each at its own scale. */
+  function encodeLine(rows, scales) {
+    let out = '';
+    const prev = scales.map(() => 0);
+    for (const r of rows) {
+      scales.forEach((sc, k) => {
+        const v = Math.round((r[k] == null || !isFinite(r[k]) ? 0 : r[k]) * sc);
+        let x = v - prev[k];
+        prev[k] = v;
+        x = x < 0 ? ~(x << 1) : x << 1;
+        while (x >= 0x20) { out += String.fromCharCode((0x20 | (x & 0x1f)) + 63); x >>= 5; }
+        out += String.fromCharCode(x + 63);
+      });
+    }
+    return out;
+  }
+  function decodeLine(str, scales) {
+    const rows = [], prev = scales.map(() => 0);
+    let i = 0;
+    while (i < str.length) {
+      const row = [];
+      for (let k = 0; k < scales.length; k++) {
+        let shift = 0, x = 0, b;
+        do { b = str.charCodeAt(i++) - 63; x |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20 && i < str.length);
+        prev[k] += x & 1 ? ~(x >> 1) : x >> 1;
+        row.push(prev[k] / scales[k]);
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+  const LATLON = [1e5, 1e5], LATLONELE = [1e5, 1e5, 1];
+
+  function b64url(bytes) {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function unb64url(str) {
+    const bin = atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  async function pipe(bytes, stream) {
+    const res = new Response(new Blob([bytes]).stream().pipeThrough(stream));
+    return new Uint8Array(await res.arrayBuffer());
+  }
+  const canDeflate = () => typeof CompressionStream !== 'undefined' && typeof Response !== 'undefined' && typeof Blob !== 'undefined';
+
+  /** The compact object a link carries. */
+  function linkData(route) {
+    const round = v => (typeof v === 'number' ? Math.round(v * 10) / 10 : v);
+    const tracks = {};
+    route.legs.forEach((l, k) => {
+      if (l.kind === 'track' && l.coords.length > 1) tracks[k] = encodeLine(Geo.simplify(l.coords, 2), LATLONELE);
+    });
+    const cues = (route.cues || []).filter(c => !c.auto).map(c => {
+      const o = {};
+      for (const [k, v] of Object.entries(c)) if (k !== 'id' && v != null && v !== '') o[k] = round(v);
+      return o;
+    });
+    const out = { v: 1, n: route.name, p: route.profile, w: encodeLine(route.waypoints.map(w => [w.lat, w.lon]), LATLON) };
+    if (cues.length) out.c = cues;
+    if (Object.keys(tracks).length) out.t = tracks;
+    return out;
+  }
+
+  async function toLink(route) {
+    const text = new TextEncoder().encode(JSON.stringify(linkData(route)));
+    if (canDeflate()) {
+      try { return 'z' + b64url(await pipe(text, new CompressionStream('deflate-raw'))); } catch (_) { /* plain below */ }
+    }
+    return 'j' + b64url(text);
+  }
+
+  /**
+   * A link back into a route: legs that were tracks come back exactly, the
+   * rest as `pending` for the router. Null if the link is damaged.
+   */
+  async function fromLink(token) {
+    try {
+      let bytes = unb64url(token.slice(1));
+      if (token[0] === 'z') {
+        if (!canDeflate()) return null;
+        bytes = await pipe(bytes, new DecompressionStream('deflate-raw'));
+      } else if (token[0] !== 'j') return null;
+      const o = JSON.parse(new TextDecoder().decode(bytes));
+      if (!o || o.v !== 1 || typeof o.w !== 'string') return null;
+      const wps = decodeLine(o.w, LATLON).map(([lat, lon]) => ({ lat, lon }));
+      if (!wps.length || wps.some(w => !(Math.abs(w.lat) <= 90 && Math.abs(w.lon) <= 180))) return null;
+      const r = blank(typeof o.n === 'string' ? o.n.slice(0, 200) : 'Shared route');
+      r.profile = typeof o.p === 'string' ? o.p : r.profile;
+      r.waypoints = wps;
+      r.legs = wps.slice(1).map((b, k) => {
+        const a = wps[k], t = o.t && o.t[k];
+        if (typeof t === 'string') {
+          const coords = decodeLine(t, LATLONELE).map(([la, lo, e]) => [la, lo, e]);
+          if (coords.length > 1) return { coords, hints: [], kind: 'track' };
+        }
+        return { coords: [[a.lat, a.lon, null], [b.lat, b.lon, null]], hints: [], kind: 'pending' };
+      });
+      r.cues = (Array.isArray(o.c) ? o.c : []).filter(c => c && typeof c.type === 'string' && isFinite(c.atM))
+        .map((c, k) => ({ ...c, id: 'l' + Date.now().toString(36) + k }));
+      r.source = 'link';
+      return r;
+    } catch (_) {
+      return null;
+    }
+  }
+
   return {
     blank, build, positionAt, nearest, legOf, fillGaps,
     put, list, get, remove, clear, exportJson, fromJson, toPlain,
+    toLink, fromLink, encodeLine, decodeLine,
     DB_NAME, DB_VERSION, STORE,
   };
 })();

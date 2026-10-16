@@ -1031,6 +1031,9 @@ tr.flash { background: rgba(88,166,255,.18) !important; }
 .tl-dirt-track { background: repeating-linear-gradient(90deg, #8a4b14 0 4px, transparent 4px 6px); }
 .tl-dirt-route { background: repeating-linear-gradient(90deg, #8a4b14 0 4px, #e0317e 4px 8px); }
 
+.share-url { width: 100%; margin-top: 8px; font-size: 11.5px; }
+.share-url[hidden] { display: none; }
+
 .map-tip {
   position: absolute; z-index: 5; pointer-events: none; max-width: 230px;
   background: rgba(13,17,23,.94); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px;

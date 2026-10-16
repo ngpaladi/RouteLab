@@ -64,7 +64,8 @@
     try { state.saved = await RouteStore.list(); } catch (_) { state.saved = []; }
     const cur = Local.current();
     const found = cur && state.saved.find(r => r.id === cur);
-    if (found) openRoute(found, { fit: !v });
+    if (await openLink()) { /* the link's route is open */ }
+    else if (found) openRoute(found, { fit: !v });
     else rebuild();
     renderList();
 
@@ -234,6 +235,8 @@
     $('export-tcx').addEventListener('click', () => exportAs('tcx'));
     $('export-csv').addEventListener('click', () => exportAs('csv'));
     $('export-json').addEventListener('click', () => exportAs('json'));
+    $('share-btn').addEventListener('click', shareLink);
+    window.addEventListener('hashchange', () => openLink());
 
     $('route-list').addEventListener('click', listClick);
     $('route-stats').addEventListener('click', e => {
@@ -375,6 +378,7 @@
   function renderRouting() {
     const n = state.inflight.size;
     if (n) say('route-status', 'loading', 'Routing ' + n + ' leg' + (n > 1 ? 's' : '') + '…');
+    else if (state.routedNote) { say('route-status', 'ok', state.routedNote); state.routedNote = null; }
     else if (/Routing/.test($('route-status').textContent)) say('route-status', '', '');
   }
 
@@ -690,6 +694,41 @@
     pick.forEach((i, k) => { if (sub[k][2] != null) e[i] = sub[k][2]; });
     RouteStore.fillGaps(e);
     for (let i = 0; i < pts.length; i++) if (isFinite(e[i])) pts[i] = [pts[i][0], pts[i][1], round1(e[i])];
+  }
+
+  // ── Links ─────────────────────────────────────────────────────────────────
+
+  const LINK_WARN = 8000;   // some chat apps and older browsers cut URLs about here
+
+  async function shareLink() {
+    const r = state.route;
+    if (r.waypoints.length < 2) { say('share-status', 'warn', 'Draw or load a route first.'); return; }
+    const url = location.href.replace(/#.*$/, '').replace(/\?.*$/, '') + '#r=' + await RouteStore.toLink(r);
+    const box = $('share-url');
+    box.value = url; box.hidden = false;
+    let copied = false;
+    try { await navigator.clipboard.writeText(url); copied = true; } catch (_) { box.select(); }
+    const long = url.length > LINK_WARN ? ' It is long (' + Math.round(url.length / 1000) + ' k characters) because of the imported track; some apps may cut it, so send the GPX for those.' : '';
+    say('share-status', long ? 'warn' : 'ok', (copied ? 'Link copied.' : 'Copy the link above.') + long);
+  }
+
+  /** Open a route from #r=… if the page was given one. True if it did. */
+  async function openLink() {
+    const m = /^#r=([A-Za-z0-9_-]+)$/.exec(location.hash);
+    if (!m) return false;
+    const r = await RouteStore.fromLink(m[1]);
+    // Out of the address bar, so a reload doesn't open a second copy.
+    try { history.replaceState(null, '', location.href.replace(/#.*$/, '')); } catch (_) { location.hash = ''; }
+    if (!r) { say('route-status', 'err', 'That route link is damaged or from a newer RouteLab, so it could not be opened.'); return false; }
+    r.profile = Router.terrainKey(r.profile);
+    r.cues = r.cues.filter(c => Cues.TYPES[c.type] && !Cues.TYPES[c.type].turn);
+    const note = 'Opened “' + r.name + '” from a link; it is saved in your routes.';
+    await adopt(r, { message: note });
+    // Said again once the legs are routed, or "Routing…" would replace it.
+    if (r.legs.some(l => l.kind === 'pending')) state.routedNote = note;
+    ensureRouted();
+    renderList();
+    return true;
   }
 
   async function loadSample() {

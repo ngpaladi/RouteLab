@@ -140,6 +140,9 @@ const dom = new JSDOM(html, {
     window.alert = msg => errors.push('alert(): ' + msg);
     window.confirm = () => true;
     window.fetch = fakeFetch;
+    // jsdom has neither; real browsers have both (and CompressionStream, left
+    // out here so the plain-link fallback is the one exercised).
+    window.TextEncoder = TextEncoder; window.TextDecoder = TextDecoder;
     window.URL.createObjectURL = blob => { downloads.push(blob); return 'blob:x'; };
     window.URL.revokeObjectURL = () => {};
     window.HTMLAnchorElement.prototype.click = function () {};
@@ -392,6 +395,25 @@ async function bootPage(file) {
   $('export-json').click();
   const json = JSON.parse(await lastDownload());
   check('JSON export round-trips', G('RouteStore').fromJson(json) && json.cues.length === R().cues.length && json.format === 'routelab-route-1');
+
+  section('Share a link');
+  const srcRoute = { name: R().name, wps: R().waypoints.length, cues: R().cues.filter(c => !c.auto).length, profile: R().profile };
+  $('share-btn').click();
+  for (let k = 0; k < 20 && $('share-url').hidden; k++) await sleep(20);
+  const link = $('share-url').value;
+  check('Copy link makes a #r= link to this page', !$('share-url').hidden && /^[^#]+#r=[jz][A-Za-z0-9_-]+$/.test(link) && /Link copied|Copy the link/.test($('share-status').textContent), link.slice(0, 80));
+  window.location.hash = link.slice(link.indexOf('#'));
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  for (let k = 0; k < 40 && R().source !== 'link'; k++) await sleep(20);
+  await settle();
+  check('opening it gives a copy: same name, terrain, points and cues', R().source === 'link' && R().name === srcRoute.name && R().profile === srcRoute.profile &&
+    R().waypoints.length === srcRoute.wps && R().cues.length === srcRoute.cues, JSON.stringify({ src: srcRoute, got: [R().source, R().name, R().waypoints.length, R().cues.length] }));
+  check('…routed afresh', R().legs.every(l => l.kind === 'route' || l.kind === 'track'));
+  check('…the link is cleared from the address bar and the route is said to be saved', !window.location.hash && /from a link/.test($('route-status').textContent), JSON.stringify([window.location.hash.slice(0, 20), $('route-status').textContent]));
+  window.location.hash = '#r=jbm9wZQ';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  await sleep(50);
+  check('a damaged link says so and leaves the route alone', R().source === 'link' && /damaged/.test($('route-status').textContent));
 
   section('Import');
   const input = $('file-input');

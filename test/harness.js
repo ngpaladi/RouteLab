@@ -32,6 +32,8 @@ const sandbox = {
   console, localStorage: memStorage(), sessionStorage: memStorage(), self: {}, indexedDB: null,
   fetch: () => Promise.reject(new Error('network disabled in tests')),
   btoa: s => Buffer.from(s, 'binary').toString('base64'),
+  atob: s => Buffer.from(s, 'base64').toString('binary'),
+  TextEncoder, TextDecoder, CompressionStream, DecompressionStream, Response, Blob,
   Math, JSON, Date, Number, String, Array, Object, Boolean, Error, Map, Set, Promise, RegExp,
   Float64Array, Int32Array, Uint8Array, ArrayBuffer, DataView, isFinite, isNaN, parseFloat, parseInt,
   URLSearchParams, encodeURIComponent, setTimeout, clearTimeout,
@@ -404,6 +406,33 @@ section('Router with a stub network');
   check('map position and open route stay out of the shared blob', page.localStorage.getItem('cl-settings') === blobBefore &&
     Local.view().z === 3 && Local.current() === 'r1');
   check('the key is never written into the blob', (Settings.set({ icuKey: 'secret' }), !/secret/.test(page.localStorage.getItem('cl-settings')) && page.localStorage.getItem('cl-icu-key') === 'secret'));
+
+  section('Route links');
+  {
+    const shared = RouteStore.fromJson(JSON.parse(JSON.stringify(route)));
+    shared.name = 'Sunday “loop”';
+    shared.profile = 'gravel';
+    const imported = Array.from({ length: 300 }, (_, i) => [38 + i * 0.0001, -122.5 + 0.0005 * Math.sin(i / 20), 100 + i]);
+    shared.legs[1] = { kind: 'track', hints: [], coords: imported };
+    shared.cues = [Cues.make('eat', 12345.67, { note: 'bar' }), Cues.power(1000, 4000, 250, 250), { id: 'turn-3', type: 'left', atM: 50, auto: true }];
+    const z = await RouteStore.toLink(shared);
+    const back = await RouteStore.fromLink(z);
+    check('a link is compressed and URL-safe', z[0] === 'z' && /^[A-Za-z0-9_-]+$/.test(z) && z.length < 2500, z.length + ' chars');
+    check('…and comes back with name, terrain and waypoints', back && back.name === shared.name && back.profile === 'gravel' &&
+      back.waypoints.length === shared.waypoints.length && back.waypoints.every((w, i) => Geo.dist(w.lat, w.lon, shared.waypoints[i].lat, shared.waypoints[i].lon) < 1.5));
+    check('…routed legs to be routed again, the imported track exactly', back.legs.length === shared.legs.length && back.legs.every((l, k) => k === 1 ? l.kind === 'track' : l.kind === 'pending') &&
+      back.legs[1].coords.length < imported.length && back.legs[1].coords.every(c => isFinite(c[2])) &&
+      Math.abs(RouteStore.build({ ...back, legs: [back.legs[1]], waypoints: back.waypoints.slice(1, 3) }).length - RouteStore.build({ ...shared, legs: [shared.legs[1]], waypoints: shared.waypoints.slice(1, 3) }).length) < 5);
+    check('…your cues, not the automatic ones', back.cues.length === 2 && back.cues[0].type === 'eat' && back.cues[0].atM === 12345.7 && back.cues[0].note === 'bar' &&
+      back.cues[1].watts === 250 && back.cues[1].endM === 4000 && back.cues.every(c => c.id), JSON.stringify(back.cues));
+    const keep = sandbox.CompressionStream;
+    sandbox.CompressionStream = undefined;
+    const j = await RouteStore.toLink(shared);
+    sandbox.CompressionStream = keep;
+    check('without CompressionStream, a plain link that still opens', j[0] === 'j' && (await RouteStore.fromLink(j)).waypoints.length === shared.waypoints.length);
+    check('a damaged link is refused, not half-opened', await RouteStore.fromLink('z' + z.slice(1, 40)) === null && await RouteStore.fromLink('jbm9wZQ') === null && await RouteStore.fromLink('x' + z.slice(1)) === null);
+    check('polyline round trip, three columns', JSON.stringify(RouteStore.decodeLine(RouteStore.encodeLine([[1.23456, -2.5, 10], [1.2346, -2.49999, -3]], [1e5, 1e5, 1]), [1e5, 1e5, 1])) === JSON.stringify([[1.23456, -2.5, 10], [1.2346, -2.49999, -3]]));
+  }
 
   section('Units');
   check('miles', Units.dist(1609.344, 'mi') === '1.00 mi' && near(Units.toM(1, 'mi'), 1609.344, 1e-9));
