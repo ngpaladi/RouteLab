@@ -4,8 +4,8 @@
  * Settings — small persistent preference bag in localStorage.
  * Loaded on every page, because the settings drawer lives in the layout.
  *
- * STORAGE IS SHARED WITH CRITLAB AND CROSSLAB. All three tools are served from
- * the same origin (www.noahpaladino.com/CritLab, /CrossLab, /RouteLab), so
+ * STORAGE IS SHARED WITH CRITLAB, CROSSLAB AND FITLAB. All four tools are served
+ * from the same origin (www.noahpaladino.com/CritLab, /CrossLab, /RouteLab, /FitLab), so
  * localStorage is one bag. The blob key, the API-key slot and every key
  * CritLab already defines keep their names and meanings here: paste the
  * intervals.icu key once and every tool sees it; set your FTP in one and the

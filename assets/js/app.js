@@ -100,7 +100,7 @@
         '45 minutes&rsquo; worth of road, drink, hold 260 W up the long climb &mdash; and export it ' +
         'as a GPX or TCX your head unit will prompt you from.</p>' +
         '<p>intervals.icu is optional here: connect it to start a route from a past ride and to ' +
-        'use your FTP for power targets. It is the same connection CritLab and CrossLab use.</p>',
+        'use your FTP for power targets. It is the same connection CritLab, CrossLab and FitLab use.</p>',
       actions: [
         { label: 'Connect intervals.icu', primary: true, href: connectUrl(), id: 'welcome-connect' },
         { label: 'Not now', id: 'welcome-later', onClick: walkthrough },
@@ -133,7 +133,7 @@
         ? { el: '#icu-panel', title: 'From intervals.icu',
             body: 'Trace any past ride with GPS as a starting point, and pull in your FTP.' }
         : { el: '#icu-connect', title: 'intervals.icu',
-            body: 'Optional: connect to trace past rides and use your FTP. CritLab and CrossLab share it.' },
+            body: 'Optional: connect to trace past rides and use your FTP. CritLab, CrossLab and FitLab share it.' },
       { el: '#demo-btn', title: 'Try one',
         body: 'The sample is a hilly 69 km loop in Marin with eat, drink and power cues already on it.' },
       { el: '#settings-btn', title: 'Settings',

@@ -10,9 +10,10 @@ you from.
 
 No server, no account, no upload. Routes live in your browser's IndexedDB.
 
-A sibling of [CritLab](https://github.com/ngpaladi/CritLab) and
-[CrossLab](https://github.com/ngpaladi/CrossLab). The three share settings,
-your FTP and weight, and the intervals.icu key.
+A sibling of [CritLab](https://github.com/ngpaladi/CritLab),
+[CrossLab](https://github.com/ngpaladi/CrossLab) and
+[FitLab](https://github.com/ngpaladi/FitLab). All four share settings and the
+intervals.icu key; RouteLab, CritLab and CrossLab also share your FTP and weight.
 
 ## Features
 
